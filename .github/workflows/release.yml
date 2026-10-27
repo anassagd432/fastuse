@@ -1,0 +1,36 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        shell: pwsh
+        run: |
+          $d = "dist/fastuse"
+          New-Item -ItemType Directory -Force $d, "$d/skills/fastuse" | Out-Null
+          Copy-Item target/release/fastuse.exe $d
+          Copy-Item skills/fastuse/SKILL.md "$d/skills/fastuse/"
+          Copy-Item README.md, LICENSE $d
+          Compress-Archive -Path "$d/*" -DestinationPath dist/fastuse-windows-x86_64.zip
+          $h = (Get-FileHash dist/fastuse-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
+          "$h  fastuse-windows-x86_64.zip" | Out-File dist/SHA256SUMS -Encoding ascii
+          Copy-Item install.ps1 dist/
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/fastuse-windows-x86_64.zip dist/SHA256SUMS dist/install.ps1 --title "${{ github.ref_name }}" --generate-notes
