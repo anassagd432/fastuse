@@ -1,19 +1,18 @@
 # fastuse installer (Windows, no admin needed)
 #
-#   irm https://github.com/OWNER/fastuse/releases/latest/download/install.ps1 | iex
+#   irm https://github.com/anassagd432/fastuse/releases/latest/download/install.ps1 | iex
 #
 # Downloads the release zip, verifies its SHA256 against the release's SHA256SUMS, installs to
 # %LOCALAPPDATA%\Programs\fastuse, and registers the server with Antigravity (agy) if it is installed.
 # It does not touch PATH, does not add startup tasks, and does not edit permission settings.
 
 param(
-    [string]$Repo = $(if ($env:FASTUSE_REPO) { $env:FASTUSE_REPO } else { "OWNER/fastuse" }),
+    [string]$Repo = $(if ($env:FASTUSE_REPO) { $env:FASTUSE_REPO } else { "anassagd432/fastuse" }),
     [string]$Version = "latest",
     [switch]$NoAgy
 )
 
 $ErrorActionPreference = "Stop"
-if ($Repo -like "OWNER/*") { throw "Set the repository: -Repo <user>/fastuse (or `$env:FASTUSE_REPO)." }
 
 $base = if ($Version -eq "latest") { "https://github.com/$Repo/releases/latest/download" } else { "https://github.com/$Repo/releases/download/$Version" }
 $zipName = "fastuse-windows-x86_64.zip"

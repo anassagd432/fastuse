@@ -26,7 +26,7 @@ End to end through Antigravity, model time dominates. A fresh `agy -p` per task 
 ## Install
 
 ```powershell
-irm https://github.com/<user>/fastuse/releases/latest/download/install.ps1 | iex
+irm https://github.com/anassagd432/fastuse/releases/latest/download/install.ps1 | iex
 ```
 
 The installer verifies a SHA256, installs to `%LOCALAPPDATA%\Programs\fastuse`, and runs `agy mcp add` plus copies the skill if `agy` is present. It does not change PATH, add startup tasks or edit permissions. Read it first: [install.ps1](install.ps1).
