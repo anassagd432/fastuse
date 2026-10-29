@@ -18,7 +18,7 @@ fn text_of(v: &Value) -> (String, bool) {
     (t, v["isError"].as_bool().unwrap_or(false))
 }
 
-pub fn run(srv: &mut crate::Server, args: &[String]) -> i32 {
+pub fn run(srv: &mut crate::server::Server, args: &[String]) -> i32 {
     let mut model = "gemini-3.8-flash".to_string();
     let mut think = "low".to_string();
     let mut max_turns = 12usize;
@@ -47,7 +47,7 @@ pub fn run(srv: &mut crate::Server, args: &[String]) -> i32 {
         }
     };
 
-    let decls: Vec<Value> = crate::tools()["tools"]
+    let decls: Vec<Value> = crate::tools::tools()["tools"]
         .as_array()
         .unwrap()
         .iter()

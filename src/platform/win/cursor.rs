@@ -158,11 +158,15 @@ fn run(rx: mpsc::Receiver<(i32, i32, bool)>) {
         let normal = sprite(screen, false);
         let pressed = sprite(screen, true);
         let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
-        let put = |dc: HDC, x: i32, y: i32| {
-            let pos = POINT { x: x - TIP, y: y - TIP };
+        // Moving is a cheap SetWindowPos; the (costlier) layered-window update only runs when the
+        // sprite changes. Updating the layered window on every step held up other threads' USER calls.
+        let skin = |dc: HDC| {
             let size = SIZE { cx: SZ, cy: SZ };
             let src = POINT { x: 0, y: 0 };
-            let _ = UpdateLayeredWindow(hwnd, Some(screen), Some(&pos), Some(&size), Some(dc), Some(&src), COLORREF(0), Some(&blend), ULW_ALPHA);
+            let _ = UpdateLayeredWindow(hwnd, None, None, Some(&size), Some(dc), Some(&src), COLORREF(0), Some(&blend), ULW_ALPHA);
+        };
+        let place = |x: i32, y: i32| {
+            let _ = SetWindowPos(hwnd, None, x - TIP, y - TIP, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
         };
         let pump = || {
             let mut m = MSG::default();
@@ -180,7 +184,8 @@ fn run(rx: mpsc::Receiver<(i32, i32, bool)>) {
                 Ok((tx_, ty_, click)) => {
                     if !visible {
                         pos = (tx_ - 60, ty_ - 40); // glide in from up-left on first appearance
-                        put(normal, pos.0, pos.1);
+                        skin(normal);
+                        place(pos.0, pos.1);
                         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                         visible = true;
                     }
@@ -189,14 +194,14 @@ fn run(rx: mpsc::Receiver<(i32, i32, bool)>) {
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
                         let e = 1.0 - (1.0 - t).powi(3); // ease-out
-                        put(normal, sx + ((tx_ - sx) as f32 * e) as i32, sy + ((ty_ - sy) as f32 * e) as i32);
+                        place(sx + ((tx_ - sx) as f32 * e) as i32, sy + ((ty_ - sy) as f32 * e) as i32);
                         std::thread::sleep(Duration::from_millis(6));
                     }
                     pos = (tx_, ty_);
                     if click {
-                        put(pressed, pos.0, pos.1);
+                        skin(pressed);
                         std::thread::sleep(Duration::from_millis(90));
-                        put(normal, pos.0, pos.1);
+                        skin(normal);
                     }
                     last = Instant::now();
                 }
@@ -211,4 +216,9 @@ fn run(rx: mpsc::Receiver<(i32, i32, bool)>) {
             pump();
         }
     }
+}
+
+/// True when the overlay thread is running (it is skipped when FASTUSE_CURSOR=0).
+pub fn enabled() -> bool {
+    TX.get().is_some()
 }

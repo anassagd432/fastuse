@@ -254,3 +254,17 @@ pub fn click_xy(top: isize, left: i32, topy: i32, x: i32, y: i32, double: bool, 
         Ok("PostMessage (background)".into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_map() {
+        assert!(vk("ctrl").is_some());
+        assert_eq!(vk("a"), vk("A"));
+        assert!(vk("f5").is_some());
+        assert!(vk("f25").is_none());
+        assert!(vk("nonsense").is_none());
+    }
+}

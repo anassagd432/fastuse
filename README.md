@@ -2,6 +2,8 @@
 
 Fast computer use for Windows, as an MCP server for [Antigravity](https://antigravity.google) (and any MCP client).
 
+**Status: Windows only for now.** Linux is planned; see [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
+
 An agent can read an app window as a compact text tree, click, type, set fields and press keys, all in the background: your real mouse pointer and keyboard focus are never touched. The agent gets its own blue cursor so you can see where it acts.
 
 It is built to be fast. Reads and actions take milliseconds, and one `act` call does a whole task step (find window, run steps, return the new UI state), so the model needs far fewer round trips.

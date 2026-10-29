@@ -1,28 +1,18 @@
 //! UI Automation tree read: one cross-process BuildUpdatedCache call, then walk the local cache.
 
-use std::fmt::Write;
-
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::UI::Accessibility::*;
 
+use crate::platform::{tree_row, Rect, TreeRead};
+
 pub struct Uia {
     auto: IUIAutomation,
     cache: IUIAutomationCacheRequest,
-    pub snap: u64,
-    /// live elements of the last snapshot, indexed by [N]; used by actions later
-    pub elements: Vec<IUIAutomationElement>,
-    /// (name, automation id, control type) per entry of `elements`, for resolving `target`
+    /// live interactive elements of the last read, indexed by [N]
+    elements: Vec<IUIAutomationElement>,
+    /// (name, automation id, control type, bounds) per entry of `elements`, for resolving `target`
     meta: Vec<(String, String, i32, [i32; 4])>,
-}
-
-pub struct Read {
-    pub text: String,
-    pub count: usize,
-    pub truncated: bool,
-    pub snapshot_id: String,
-    pub build_us: u128,
-    pub walk_us: u128,
 }
 
 fn type_name(id: i32) -> &'static str {
@@ -83,23 +73,20 @@ impl Uia {
             cache.AddPattern(UIA_ValuePatternId)?;
             cache.SetTreeScope(TreeScope_Subtree)?;
             cache.SetTreeFilter(&auto.ControlViewCondition()?)?;
-            Ok(Self { auto, cache, snap: 0, elements: Vec::new(), meta: Vec::new() })
+            Ok(Self { auto, cache, elements: Vec::new(), meta: Vec::new() })
         }
     }
 
-    /// Resolve "sNNNNNNNN:N" against the latest snapshot only; older snapshots are stale.
-    pub fn token(&self, tok: &str) -> Result<&IUIAutomationElement, String> {
-        let (sid, idx) = tok.split_once(':').ok_or("bad element_token (expected sNNNNNNNN:N)")?;
-        if sid != format!("s{:08}", self.snap) {
-            return Err(format!("stale element_token {tok}: latest snapshot is s{:08}; call get_window_state again", self.snap));
-        }
-        let i: usize = idx.parse().map_err(|_| "bad element index")?;
-        self.elements.get(i).ok_or_else(|| format!("no element [{i}] in snapshot"))
+    pub fn element(&self, i: usize) -> Option<&IUIAutomationElement> {
+        self.elements.get(i)
     }
 
-    /// Screen-space center of element `tok` ("sNNNNNNNN:N") in the latest snapshot, if it has bounds.
-    pub fn center_of(&self, tok: &str) -> Option<(i32, i32)> {
-        let i: usize = tok.split_once(':')?.1.parse().ok()?;
+    pub fn element_count(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Screen-space center of element `i`, if it has bounds.
+    pub fn center_of(&self, i: usize) -> Option<(i32, i32)> {
         let r = self.meta.get(i)?.3;
         if r[2] <= r[0] || r[3] <= r[1] {
             return None;
@@ -107,7 +94,7 @@ impl Uia {
         Some(((r[0] + r[2]) / 2, (r[1] + r[3]) / 2))
     }
 
-    /// Resolve a human target ("Go", "Button:Go", an automation id) to an index of the latest snapshot.
+    /// Resolve a human target ("Go", "Button:Go", an automation id) to an index of the latest read.
     pub fn resolve_target(&self, target: &str) -> Result<usize, String> {
         if self.meta.is_empty() {
             return Err("no snapshot yet; the window has no interactive elements or was not read".into());
@@ -142,7 +129,7 @@ impl Uia {
         }
     }
 
-    pub fn read(&mut self, hwnd: isize, max_elements: usize, max_depth: usize) -> Result<Read, String> {
+    pub fn read(&mut self, hwnd: isize, max_elements: usize, max_depth: usize) -> Result<TreeRead, String> {
         use std::time::Instant;
         unsafe {
             let t0 = Instant::now();
@@ -152,23 +139,14 @@ impl Uia {
                 .map_err(|e| e.to_string())?;
             let build_us = t0.elapsed().as_micros();
             let t1 = Instant::now();
-            self.snap += 1;
-            let sid = format!("s{:08}", self.snap);
             self.elements.clear();
             self.meta.clear();
             let mut out = String::with_capacity(4096);
             let mut count = 0usize;
             let mut truncated = false;
             self.walk(&root, 0, max_depth, max_elements, &mut count, &mut truncated, &mut out);
-            let _ = writeln!(out);
-            Ok(Read {
-                text: out,
-                count,
-                truncated,
-                snapshot_id: sid,
-                build_us,
-                walk_us: t1.elapsed().as_micros(),
-            })
+            out.push('\n');
+            Ok(TreeRead { text: out, count, truncated, build_us, walk_us: t1.elapsed().as_micros() })
         }
     }
 
@@ -191,41 +169,28 @@ impl Uia {
         let ct = el.CachedControlType().map(|c| c.0).unwrap_or(0);
         let name = el.CachedName().map(|b| b.to_string()).unwrap_or_default();
         let aid = el.CachedAutomationId().map(|b| b.to_string()).unwrap_or_default();
-        let indent = "  ".repeat(depth);
-        let _ = write!(out, "{indent}- ");
-        if interactive(ct) {
-            let idx = self.elements.len();
+        let rect = el
+            .CachedBoundingRectangle()
+            .ok()
+            .map(|r| Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+        let is_int = interactive(ct);
+        let mut idx = None;
+        if is_int {
+            let i = self.elements.len();
             self.elements.push(el.clone());
-            let rect = el
-                .CachedBoundingRectangle()
-                .map(|r| [r.left, r.top, r.right, r.bottom])
-                .unwrap_or([0; 4]);
-            self.meta.push((name.clone(), aid.clone(), ct, rect));
-            let _ = write!(out, "[{idx}] ");
+            let b = rect.unwrap_or_default();
+            self.meta.push((name.clone(), aid.clone(), ct, [b.left, b.top, b.right, b.bottom]));
+            idx = Some(i);
         }
-        let _ = write!(out, "{}", type_name(ct));
-        if !name.is_empty() {
-            let _ = write!(out, " \"{}\"", name.replace('"', "'").chars().take(80).collect::<String>());
-        }
+        let mut value = String::new();
         if ct == 50004 || ct == 50030 {
             if let Ok(p) = el.GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
                 if let Ok(v) = p.CachedValue() {
-                    let v = v.to_string();
-                    if !v.is_empty() {
-                        let _ = write!(out, " value=\"{}\"", v.replace('"', "'").chars().take(120).collect::<String>());
-                    }
+                    value = v.to_string();
                 }
             }
         }
-        if !aid.is_empty() {
-            let _ = write!(out, " id={aid}");
-        }
-        if let Ok(r) = el.CachedBoundingRectangle() {
-            if interactive(ct) {
-                let _ = write!(out, " @({},{},{},{})", r.left, r.top, r.right - r.left, r.bottom - r.top);
-            }
-        }
-        let _ = writeln!(out);
+        tree_row(out, depth, idx, type_name(ct), &name, &value, &aid, if is_int { rect } else { None });
         if depth + 1 >= max_depth {
             return;
         }
