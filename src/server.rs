@@ -194,6 +194,7 @@ impl Server {
         let steps = a.get("steps").and_then(|s| s.as_array()).ok_or("steps is required")?;
         let t0 = Instant::now();
         let tw = self.resolve(a)?;
+        self.show_agent(&tw);
         if steps.iter().any(|s| s.get("target").is_some()) {
             self.read(&tw, 250, 25)?;
         }
@@ -232,6 +233,13 @@ impl Server {
             Err(out)
         } else {
             Ok(out)
+        }
+    }
+
+    /// Let the user see the agent arrive at the window it is about to work on.
+    fn show_agent(&self, w: &WindowInfo) {
+        if !w.minimized && w.rect.w() > 0 {
+            self.p.move_cursor((w.rect.left + w.rect.right) / 2, (w.rect.top + w.rect.bottom) / 2, false);
         }
     }
 
@@ -298,6 +306,7 @@ impl Server {
                     Ok(w) => w,
                     Err(e) => return err(e),
                 };
+                self.show_agent(&w);
                 let t = match self.state_text(&w, a) {
                     Ok(t) => t,
                     Err(e) => return err(e),

@@ -94,7 +94,7 @@ The input format is undocumented by Google and was found by probing; it may chan
 - Foreground actions (`hotkey`, `delivery_mode:"foreground"`) refuse to send keys unless the target window really took the foreground.
 - Stale element tokens are rejected.
 - Do not point it at windows you do not want an agent to operate (email, banking). There is no per-app allowlist yet.
-- Cursor overlay off: set `FASTUSE_CURSOR=0`.
+- Agent cursor: a glowing blue arrow that glides to wherever the agent acts and ripples on click. It appears when the agent starts working on a window and fades after 8 s idle. It never moves your real pointer. `FASTUSE_CURSOR=0` turns it off; `FASTUSE_CURSOR_SYNC=1` makes each action wait (up to 0.8 s) until the cursor arrives, so every stop is visible (slower). The look is inspired by [cua-driver](https://github.com/trycua/cua)'s agent cursor (MIT); the code is our own.
 
 ## Optional: standalone runner
 
