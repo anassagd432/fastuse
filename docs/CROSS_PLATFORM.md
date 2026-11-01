@@ -1,5 +1,7 @@
 # Cross-platform plan
 
+**macOS is the next target, before Linux: see [MACOS.md](MACOS.md).**
+
 Status: **Phase 0 done** (portable core + `Platform` trait, Windows backend). Linux is planned and not started. Nothing below Phase 0 has been built or tested.
 
 ## Architecture (Phase 0, done)
