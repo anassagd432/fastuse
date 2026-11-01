@@ -35,6 +35,12 @@ Chromium/Electron expose a thin AX tree until accessibility is switched on for t
 - **M3: capture and cursor:** ScreenCaptureKit window/desktop capture; `NSWindow` cursor overlay with the same sprite.
 - **M4: ship:** resolve the TCC identity question (A or B), signing and notarization, `install.sh`, CI on `macos-latest`, README, Antigravity setup (the `agy mcp add` flow is assumed to match Windows, *unverified*).
 
+## M0 status (done on Windows)
+
+- `platform::run_app` creates the backend and runs the app; macOS will override it to run AppKit on the main thread.
+- Windows-only dependencies are now target-specific and the Gemini runner is an optional feature (`runner`, on by default).
+- The portable core type-checks for macOS from a Windows PC with `cargo check --target aarch64-apple-darwin --no-default-features` (needs `rustup target add aarch64-apple-darwin`). This checks types only: no linking, no running. With the runner feature the check fails on Windows because `ring` needs a C cross-compiler.
+
 ## Rust building blocks (to evaluate on a Mac)
 
 `objc2` + `objc2-app-kit` + `objc2-application-services` or the `axuielement` crate (exposes `AXUIElementCopyMultipleAttributeValues` and a messaging timeout) for Accessibility; `core-graphics` for events and window lists; a ScreenCaptureKit binding such as `screencapturekit` (API unverified).

@@ -1,5 +1,6 @@
 mod imaging;
 mod platform;
+#[cfg(feature = "runner")]
 mod runner;
 mod server;
 mod tools;
@@ -13,19 +14,19 @@ fn main() {
         println!("fastuse {}", env!("CARGO_PKG_VERSION"));
         return;
     }
-    let p = match platform::default() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("fastuse: {e}");
-            std::process::exit(1);
-        }
-    };
+    std::process::exit(platform::run_app(app));
+}
+
+fn app(p: Box<dyn platform::Platform>) -> i32 {
     let mut srv = server::Server::new(p);
     let instructions = tools::instructions(srv.platform_name());
 
-    let argv: Vec<String> = std::env::args().collect();
-    if argv.get(1).map(|s| s.as_str()) == Some("run") {
-        std::process::exit(runner::run(&mut srv, &argv[2..]));
+    #[cfg(feature = "runner")]
+    {
+        let argv: Vec<String> = std::env::args().collect();
+        if argv.get(1).map(|s| s.as_str()) == Some("run") {
+            return runner::run(&mut srv, &argv[2..]);
+        }
     }
 
     let stdin = std::io::stdin();
@@ -63,4 +64,5 @@ fn main() {
         let _ = writeln!(out, "{}", json!({"jsonrpc":"2.0","id":id,"result":result}));
         let _ = out.flush();
     }
+    0
 }

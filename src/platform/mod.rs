@@ -139,13 +139,32 @@ pub fn tree_row(out: &mut String, depth: usize, idx: Option<usize>, role: &str, 
 }
 
 #[cfg(windows)]
-pub fn default() -> Result<Box<dyn Platform>, String> {
+fn default() -> Result<Box<dyn Platform>, String> {
     Ok(Box::new(win::WinPlatform::new()?))
 }
 
 #[cfg(not(windows))]
-pub fn default() -> Result<Box<dyn Platform>, String> {
-    Err("fastuse currently supports Windows only; Linux support is planned (see docs/CROSS_PLATFORM.md)".into())
+fn default() -> Result<Box<dyn Platform>, String> {
+    Err("fastuse currently supports Windows only; macOS is next, then Linux (see docs/MACOS.md)".into())
+}
+
+/// Run the application with this OS's backend.
+///
+/// The backend is created and used on whichever thread `f` runs on. Windows runs `f` right here
+/// on the main thread. macOS will override this: AppKit (the agent cursor window) must own the
+/// main thread, so the macOS backend will start `f` on a worker thread, build the platform there,
+/// and run the main run loop itself.
+pub fn run_app<F>(f: F) -> i32
+where
+    F: FnOnce(Box<dyn Platform>) -> i32 + Send + 'static,
+{
+    match default() {
+        Ok(p) => f(p),
+        Err(e) => {
+            eprintln!("fastuse: {e}");
+            1
+        }
+    }
 }
 
 #[cfg(test)]
