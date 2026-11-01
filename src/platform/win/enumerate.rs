@@ -74,16 +74,5 @@ pub fn exe_name(pid: u32) -> String {
 }
 
 pub fn find(q: &WindowQuery) -> Option<WindowInfo> {
-    let all = list();
-    if let Some(t) = &q.title {
-        let t = t.to_lowercase();
-        let mut m: Vec<WindowInfo> = all.into_iter().filter(|w| w.title.to_lowercase().contains(&t)).collect();
-        m.sort_by_key(|w| w.minimized);
-        return m.into_iter().next();
-    }
-    if let Some(id) = q.id {
-        return all.into_iter().find(|w| w.id == id);
-    }
-    let pid = q.pid?;
-    all.into_iter().filter(|w| w.pid == pid).max_by_key(|w| w.rect.w() as i64 * w.rect.h() as i64)
+    crate::platform::pick_window(list(), q)
 }

@@ -41,6 +41,40 @@ Chromium/Electron expose a thin AX tree until accessibility is switched on for t
 - Windows-only dependencies are now target-specific and the Gemini runner is an optional feature (`runner`, on by default).
 - The portable core type-checks for macOS from a Windows PC with `cargo check --target aarch64-apple-darwin --no-default-features` (needs `rustup target add aarch64-apple-darwin`). This checks types only: no linking, no running. With the runner feature the check fails on Windows because `ring` needs a C cross-compiler.
 
+## M1 status (written, type-checked, NOT yet run on a Mac)
+
+Implemented in `src/platform/mac/`: window list (CoreGraphics), UI tree through the Accessibility API with one batched attribute call per element, `AXPress` clicks, setting `AXValue`, `fastuse doctor`. Titles show as `App — Window title` (just the app name until Screen Recording is granted), so `window="TextEdit"` works either way. Coordinates are points, not pixels.
+
+Not yet: typing, key presses, hotkeys, clicking at x,y (M2); screenshots and the agent cursor (M3). Those return a clear "not implemented yet" error. Use `set_value` for text fields.
+
+### Try it on a Mac
+
+```bash
+xcode-select --install          # command-line tools (skip if already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust (skip if installed), then open a new terminal
+git clone https://github.com/anassagd432/fastuse.git
+cd fastuse
+cargo build --release
+./target/release/fastuse --version
+./target/release/fastuse doctor
+```
+
+`doctor` tells you whether Accessibility and Screen Recording are granted. macOS attaches them to the app that launched fastuse (Terminal, iTerm, or Antigravity), so grant that app in System Settings > Privacy & Security, then quit and reopen it.
+
+Then open TextEdit with a new document and run the smoke test (it prints window titles and the first lines of that window's tree, and times 10 reads):
+
+```bash
+python3 bench/smoke.py TextEdit
+```
+
+To use it from Antigravity:
+
+```bash
+agy mcp add fastuse "$PWD/target/release/fastuse"
+mkdir -p ~/.gemini/antigravity/global_skills/fastuse && cp skills/fastuse/SKILL.md ~/.gemini/antigravity/global_skills/fastuse/
+```
+
+Paste back the output of `doctor` and `smoke.py`, plus any error text, so the next step can be fixed.
 ## Rust building blocks (to evaluate on a Mac)
 
 `objc2` + `objc2-app-kit` + `objc2-application-services` or the `axuielement` crate (exposes `AXUIElementCopyMultipleAttributeValues` and a messaging timeout) for Accessibility; `core-graphics` for events and window lists; a ScreenCaptureKit binding such as `screencapturekit` (API unverified).

@@ -57,6 +57,10 @@ impl Server {
         self.p.name()
     }
 
+    pub fn doctor(&self) -> String {
+        self.p.doctor()
+    }
+
     fn resolve(&self, a: &Value) -> Result<WindowInfo, String> {
         let q = WindowQuery {
             title: arg_s(a, "window").map(String::from),

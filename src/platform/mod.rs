@@ -10,6 +10,8 @@ use crate::imaging::Frame;
 
 #[cfg(windows)]
 pub mod win;
+#[cfg(target_os = "macos")]
+pub mod mac;
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Rect {
@@ -110,8 +112,83 @@ pub trait Platform {
     fn grab(&mut self, t: CaptureTarget, screen_mode: bool) -> Result<Frame, String>;
     /// Glide the agent cursor to a screen point. No-op where unsupported.
     fn move_cursor(&self, x: i32, y: i32, click: bool);
+
+    /// Human-readable health report for `fastuse doctor` (permissions, accessibility switches...).
+    fn doctor(&self) -> String {
+        format!("{}: no extra checks.", self.name())
+    }
 }
 
+/// What a backend remembers about each interactive element of its latest tree read.
+#[derive(Clone, Debug)]
+pub struct ElementMeta {
+    pub name: String,
+    pub id: String,
+    pub role: &'static str,
+    /// left, top, right, bottom in screen pixels
+    pub rect: [i32; 4],
+}
+
+/// Screen-space center of element `i`, if it has bounds.
+pub fn center_in(meta: &[ElementMeta], i: usize) -> Option<(i32, i32)> {
+    let r = meta.get(i)?.rect;
+    if r[2] <= r[0] || r[3] <= r[1] {
+        return None;
+    }
+    Some(((r[0] + r[2]) / 2, (r[1] + r[3]) / 2))
+}
+
+/// Resolve a human target ("Go", "Button:Go", an automation id) to an index into `meta`.
+/// Exact name/id matches win over substring matches; ambiguity is an error that lists candidates.
+pub fn resolve_in(meta: &[ElementMeta], target: &str) -> Result<usize, String> {
+    if meta.is_empty() {
+        return Err("no snapshot yet; the window has no interactive elements or was not read".into());
+    }
+    let (role, want) = match target.split_once(':') {
+        Some((r, n)) if meta.iter().any(|m| m.role.eq_ignore_ascii_case(r)) => (Some(r), n),
+        _ => (None, target),
+    };
+    let w = want.trim().to_lowercase();
+    let ok_role = |i: usize| role.map_or(true, |r| meta[i].role.eq_ignore_ascii_case(r));
+    let exact: Vec<usize> = (0..meta.len())
+        .filter(|&i| ok_role(i) && (meta[i].name.to_lowercase() == w || meta[i].id.to_lowercase() == w))
+        .collect();
+    let hits: Vec<usize> = if exact.is_empty() {
+        (0..meta.len())
+            .filter(|&i| ok_role(i) && (meta[i].name.to_lowercase().contains(&w) || meta[i].id.to_lowercase().contains(&w)))
+            .collect()
+    } else {
+        exact
+    };
+    match hits.len() {
+        1 => Ok(hits[0]),
+        0 => Err(format!("no element matches target '{target}'")),
+        _ => Err(format!(
+            "target '{target}' is ambiguous: {}. Use Role:Name or an id.",
+            hits.iter()
+                .take(6)
+                .map(|&i| format!("[{i}] {} \"{}\"", meta[i].role, meta[i].name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// Choose a window from `all` for a query. Precedence: title substring (non-minimized first),
+/// then exact id, then the largest window of `pid`.
+pub fn pick_window(all: Vec<WindowInfo>, q: &WindowQuery) -> Option<WindowInfo> {
+    if let Some(t) = &q.title {
+        let t = t.to_lowercase();
+        let mut m: Vec<WindowInfo> = all.into_iter().filter(|w| w.title.to_lowercase().contains(&t)).collect();
+        m.sort_by_key(|w| w.minimized);
+        return m.into_iter().next();
+    }
+    if let Some(id) = q.id {
+        return all.into_iter().find(|w| w.id == id);
+    }
+    let pid = q.pid?;
+    all.into_iter().filter(|w| w.pid == pid).max_by_key(|w| w.rect.w() as i64 * w.rect.h() as i64)
+}
 /// One row of the text tree. Shared so the output format is identical on every platform:
 /// `  - [N] Role "name" value="..." id=x @(left,top,w,h)` (`[N]` and `@` only for interactive rows).
 pub fn tree_row(out: &mut String, depth: usize, idx: Option<usize>, role: &str, name: &str, value: &str, id: &str, rect: Option<Rect>) {
@@ -143,7 +220,12 @@ fn default() -> Result<Box<dyn Platform>, String> {
     Ok(Box::new(win::WinPlatform::new()?))
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn default() -> Result<Box<dyn Platform>, String> {
+    Ok(Box::new(mac::MacPlatform::new()?))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn default() -> Result<Box<dyn Platform>, String> {
     Err("fastuse currently supports Windows only; macOS is next, then Linux (see docs/MACOS.md)".into())
 }
@@ -171,6 +253,32 @@ where
 mod tests {
     use super::*;
 
+
+    fn meta(name: &str, id: &str, role: &'static str) -> ElementMeta {
+        ElementMeta { name: name.into(), id: id.into(), role, rect: [0, 0, 10, 10] }
+    }
+
+    #[test]
+    fn resolve_exact_beats_substring_and_role_prefix_disambiguates() {
+        let m = vec![meta("Save", "", "Button"), meta("Save As", "", "Button"), meta("Save", "", "MenuItem")];
+        assert!(resolve_in(&m, "Save").unwrap_err().contains("ambiguous")); // two exact matches
+        assert_eq!(resolve_in(&m, "Button:Save").unwrap(), 0);
+        assert_eq!(resolve_in(&m, "MenuItem:Save").unwrap(), 2);
+        assert_eq!(resolve_in(&m, "as").unwrap(), 1); // unique substring
+        assert!(resolve_in(&m, "nope").is_err());
+        assert!(resolve_in(&[], "x").is_err());
+    }
+
+    #[test]
+    fn pick_window_precedence() {
+        let w = |id, pid, title: &str, w, mini| WindowInfo { id, pid, title: title.into(), rect: Rect { left: 0, top: 0, right: w, bottom: 10 }, minimized: mini };
+        let all = || vec![w(1, 7, "Notes - a", 100, true), w(2, 7, "Notes - b", 50, false), w(3, 8, "Other", 500, false)];
+        let by_title = pick_window(all(), &WindowQuery { title: Some("notes".into()), ..Default::default() }).unwrap();
+        assert_eq!(by_title.id, 2); // non-minimized first
+        assert_eq!(pick_window(all(), &WindowQuery { id: Some(3), ..Default::default() }).unwrap().pid, 8);
+        assert_eq!(pick_window(all(), &WindowQuery { pid: Some(7), ..Default::default() }).unwrap().id, 1); // largest
+        assert!(pick_window(all(), &WindowQuery::default()).is_none());
+    }
     #[test]
     fn tree_row_format() {
         let mut s = String::new();

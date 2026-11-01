@@ -4,7 +4,7 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::UI::Accessibility::*;
 
-use crate::platform::{tree_row, Rect, TreeRead};
+use crate::platform::{center_in, resolve_in, tree_row, ElementMeta, Rect, TreeRead};
 
 pub struct Uia {
     auto: IUIAutomation,
@@ -12,7 +12,7 @@ pub struct Uia {
     /// live interactive elements of the last read, indexed by [N]
     elements: Vec<IUIAutomationElement>,
     /// (name, automation id, control type, bounds) per entry of `elements`, for resolving `target`
-    meta: Vec<(String, String, i32, [i32; 4])>,
+    meta: Vec<ElementMeta>,
 }
 
 fn type_name(id: i32) -> &'static str {
@@ -87,46 +87,12 @@ impl Uia {
 
     /// Screen-space center of element `i`, if it has bounds.
     pub fn center_of(&self, i: usize) -> Option<(i32, i32)> {
-        let r = self.meta.get(i)?.3;
-        if r[2] <= r[0] || r[3] <= r[1] {
-            return None;
-        }
-        Some(((r[0] + r[2]) / 2, (r[1] + r[3]) / 2))
+        center_in(&self.meta, i)
     }
 
     /// Resolve a human target ("Go", "Button:Go", an automation id) to an index of the latest read.
     pub fn resolve_target(&self, target: &str) -> Result<usize, String> {
-        if self.meta.is_empty() {
-            return Err("no snapshot yet; the window has no interactive elements or was not read".into());
-        }
-        let (role, want) = match target.split_once(':') {
-            Some((r, n)) if self.meta.iter().any(|m| type_name(m.2).eq_ignore_ascii_case(r)) => (Some(r), n),
-            _ => (None, target),
-        };
-        let w = want.trim().to_lowercase();
-        let ok_role = |i: usize| role.map_or(true, |r| type_name(self.meta[i].2).eq_ignore_ascii_case(r));
-        let exact: Vec<usize> = (0..self.meta.len())
-            .filter(|&i| ok_role(i) && (self.meta[i].0.to_lowercase() == w || self.meta[i].1.to_lowercase() == w))
-            .collect();
-        let hits = if exact.is_empty() {
-            (0..self.meta.len())
-                .filter(|&i| ok_role(i) && (self.meta[i].0.to_lowercase().contains(&w) || self.meta[i].1.to_lowercase().contains(&w)))
-                .collect()
-        } else {
-            exact
-        };
-        match hits.len() {
-            1 => Ok(hits[0]),
-            0 => Err(format!("no element matches target '{target}'")),
-            _ => Err(format!(
-                "target '{target}' is ambiguous: {}. Use Role:Name or an id.",
-                hits.iter()
-                    .take(6)
-                    .map(|&i| format!("[{i}] {} \"{}\"", type_name(self.meta[i].2), self.meta[i].0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        }
+        resolve_in(&self.meta, target)
     }
 
     pub fn read(&mut self, hwnd: isize, max_elements: usize, max_depth: usize) -> Result<TreeRead, String> {
@@ -179,7 +145,7 @@ impl Uia {
             let i = self.elements.len();
             self.elements.push(el.clone());
             let b = rect.unwrap_or_default();
-            self.meta.push((name.clone(), aid.clone(), ct, [b.left, b.top, b.right, b.bottom]));
+            self.meta.push(ElementMeta { name: name.clone(), id: aid.clone(), role: type_name(ct), rect: [b.left, b.top, b.right, b.bottom] });
             idx = Some(i);
         }
         let mut value = String::new();

@@ -2,7 +2,7 @@
 
 Fast computer use for Windows, as an MCP server for [Antigravity](https://antigravity.google) (and any MCP client).
 
-**Status: Windows only for now.** macOS is next, then Linux; see [docs/MACOS.md](docs/MACOS.md) and [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
+**Status: Windows is supported. macOS is an early read-only preview (M1, untested on a real Mac yet); Linux is planned.** See [docs/MACOS.md](docs/MACOS.md) and [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
 
 An agent can read an app window as a compact text tree, click, type, set fields and press keys, all in the background: your real mouse pointer and keyboard focus are never touched. The agent gets its own blue cursor so you can see where it acts.
 

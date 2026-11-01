@@ -21,6 +21,11 @@ fn app(p: Box<dyn platform::Platform>) -> i32 {
     let mut srv = server::Server::new(p);
     let instructions = tools::instructions(srv.platform_name());
 
+    if std::env::args().nth(1).as_deref() == Some("doctor") {
+        println!("{}", srv.doctor());
+        return 0;
+    }
+
     #[cfg(feature = "runner")]
     {
         let argv: Vec<String> = std::env::args().collect();
