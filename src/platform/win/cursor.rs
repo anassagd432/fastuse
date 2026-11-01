@@ -32,9 +32,9 @@ static TX: OnceLock<mpsc::Sender<Msg>> = OnceLock::new();
 static SYNC: OnceLock<bool> = OnceLock::new();
 
 const IDLE_FADE: Duration = Duration::from_secs(8);
-const CANVAS: f32 = 96.0; // logical size of the sprite canvas
-const TIP: f32 = 36.0; // logical offset of the arrow tip inside the canvas
-const K: f32 = 1.7; // arrow scale (logical)
+const CANVAS: f32 = 64.0; // logical size of the sprite canvas
+const TIP: f32 = 20.0; // logical offset of the arrow tip inside the canvas
+const K: f32 = 1.12; // arrow scale (logical): about the size of the macOS pointer
 const RIPPLE_FRAMES: usize = 7;
 const COLOR: (f32, f32, f32) = (47.0, 107.0, 255.0);
 
@@ -117,47 +117,44 @@ fn over(dst: &mut [f32; 4], c: (f32, f32, f32), a: f32) {
 /// Premultiplied BGRA sprite. `ring` = (radius in logical units, alpha) draws a click ripple.
 fn render(size: i32, s: f32, ring: Option<(f32, f32)>) -> Vec<u32> {
     let poly = pts(s);
-    let glow_r = 10.0 * s;
-    let outline = 1.7 * s;
+    let rf = 0.8 * s; // grows the fill a little, which rounds the corners
+    let ow = 1.15 * s; // white outline width
     let tip = TIP * s;
+    let height = 20.0 * K * s;
+    let (shx, shy, sblur) = (0.8 * s, 1.7 * s, 3.2 * s); // soft drop shadow, like the macOS pointer
+    // signed distance to the arrow: negative inside
+    let sdf = |px: f32, py: f32| {
+        let d = edge_dist(&poly, px, py);
+        if inside(&poly, px, py) {
+            -d
+        } else {
+            d
+        }
+    };
     let mut out = vec![0u32; (size * size) as usize];
     for y in 0..size {
         for x in 0..size {
-            let mut acc = [0f32; 4];
-            for sy in 0..2 {
-                for sx in 0..2 {
-                    let px = x as f32 + (sx as f32 + 0.5) / 2.0;
-                    let py = y as f32 + (sy as f32 + 0.5) / 2.0;
-                    let mut p = [0f32; 4];
-                    let d = edge_dist(&poly, px, py);
-                    let is_in = inside(&poly, px, py);
-                    if !is_in && d < glow_r {
-                        let g = 1.0 - d / glow_r;
-                        over(&mut p, COLOR, 0.55 * g * g);
-                    }
-                    if let Some((r, a)) = ring {
-                        let rr = ((px - tip).powi(2) + (py - tip).powi(2)).sqrt();
-                        let w = 2.4 * s;
-                        let e = 1.0 - ((rr - r * s).abs() / w).min(1.0);
-                        if e > 0.0 {
-                            over(&mut p, COLOR, a * e);
-                        }
-                    }
-                    if is_in {
-                        over(&mut p, COLOR, 1.0);
-                    } else if d <= outline {
-                        over(&mut p, (255.0, 255.0, 255.0), 1.0);
-                    }
-                    for i in 0..4 {
-                        acc[i] += p[i];
-                    }
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let mut p = [0f32; 4];
+            // shadow
+            let sd = sdf(px - shx, py - shy) - rf;
+            let t = (sd / sblur).clamp(0.0, 1.0);
+            over(&mut p, (0.0, 0.0, 0.0), 0.30 * (1.0 - t) * (1.0 - t));
+            // click ripple
+            if let Some((r, a)) = ring {
+                let rr = ((px - tip).powi(2) + (py - tip).powi(2)).sqrt();
+                let e = (1.0 - ((rr - r * s).abs() / (1.6 * s)).min(1.0)).max(0.0);
+                if e > 0.0 {
+                    over(&mut p, COLOR, a * e);
                 }
             }
-            let n = 4.0;
-            out[(y * size + x) as usize] = ((acc[3] / n) as u32) << 24
-                | ((acc[0] / n) as u32) << 16
-                | ((acc[1] / n) as u32) << 8
-                | (acc[2] / n) as u32;
+            // white outline, then a gently graded brand-blue fill, both analytically anti-aliased
+            let d = sdf(px, py) - rf;
+            over(&mut p, (255.0, 255.0, 255.0), (0.5 - (d - ow)).clamp(0.0, 1.0));
+            let g = ((py - tip) / height).clamp(0.0, 1.0);
+            let col = (78.0 + (40.0 - 78.0) * g, 132.0 + (98.0 - 132.0) * g, 255.0 + (238.0 - 255.0) * g);
+            over(&mut p, col, (0.5 - d).clamp(0.0, 1.0));
+            out[(y * size + x) as usize] = (p[3] as u32) << 24 | (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32;
         }
     }
     out
@@ -224,7 +221,7 @@ fn run(rx: mpsc::Receiver<Msg>) {
         let ripple: Vec<HDC> = (0..RIPPLE_FRAMES)
             .map(|i| {
                 let f = i as f32 / (RIPPLE_FRAMES - 1) as f32;
-                sprite(screen, size, &render(size, s, Some((8.0 + 24.0 * f, 0.95 * (1.0 - f)))))
+                sprite(screen, size, &render(size, s, Some((4.0 + 15.0 * f, 0.75 * (1.0 - f)))))
             })
             .collect();
 
@@ -278,7 +275,7 @@ fn run(rx: mpsc::Receiver<Msg>) {
                     let (cx, cy) = ((pos.0 + tx_) / 2.0 - dy * 0.18, (pos.1 + ty_) / 2.0 + dx * 0.18);
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
-                        let e = t * t * (3.0 - 2.0 * t);
+                        let e = t * t * t * (t * (t * 6.0 - 15.0) + 10.0); // smootherstep: soft start and stop
                         let u = 1.0 - e;
                         place(u * u * pos.0 + 2.0 * u * e * cx + e * e * tx_, u * u * pos.1 + 2.0 * u * e * cy + e * e * ty_);
                         std::thread::sleep(Duration::from_millis(14));
