@@ -1,4 +1,6 @@
 mod imaging;
+#[cfg(any(windows, target_os = "macos"))]
+mod overlay;
 mod platform;
 #[cfg(feature = "runner")]
 mod runner;
@@ -23,6 +25,11 @@ fn app(p: Box<dyn platform::Platform>) -> i32 {
 
     if std::env::args().nth(1).as_deref() == Some("doctor") {
         println!("{}", srv.doctor());
+        return 0;
+    }
+
+    if std::env::args().nth(1).as_deref() == Some("demo") {
+        srv.demo();
         return 0;
     }
 

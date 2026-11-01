@@ -1,13 +1,18 @@
-//! macOS backend (milestone M1: read-only plus AXPress / set value).
+//! macOS backend (M1 plus the agent overlay).
 //!
 //! Working: window list (CoreGraphics), UI tree and element actions through the Accessibility API,
-//! `fastuse doctor`. Not yet: typing, keys, coordinate clicks (M2), screenshots and the agent
-//! cursor (M3). Those return clear "not implemented yet" errors and capabilities report them.
+//! the agent cursor / screen-edge glow / banner (AppKit), `fastuse doctor`. Not yet: typing, keys,
+//! coordinate clicks (M2) and screenshots (M3). Those return clear "not implemented yet" errors
+//! and capabilities report them.
 
 mod ax;
 mod cg;
+mod overlay;
 
 use std::time::Instant;
+
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 
 use crate::imaging::Frame;
 use crate::platform::{
@@ -22,6 +27,7 @@ pub struct MacPlatform {
 
 impl MacPlatform {
     pub fn new() -> Result<Self, String> {
+        crate::overlay::init(overlay::MacSurface::new);
         Ok(Self { elements: Vec::new(), meta: Vec::new() })
     }
 }
@@ -41,7 +47,7 @@ impl Platform for MacPlatform {
             foreground_input: false,
             window_capture: false,
             desktop_capture: false,
-            overlay_cursor: false,
+            overlay_cursor: crate::overlay::enabled(),
         }
     }
 
@@ -116,7 +122,9 @@ impl Platform for MacPlatform {
         Err(todo("screenshots", "M3"))
     }
 
-    fn move_cursor(&self, _x: i32, _y: i32, _click: bool) {}
+    fn move_cursor(&self, x: i32, y: i32, click: bool) {
+        crate::overlay::go(x, y, click);
+    }
 
     fn doctor(&self) -> String {
         let ax_ok = ax::trusted();
@@ -145,4 +153,31 @@ impl Platform for MacPlatform {
         }
         s
     }
+}
+
+/// AppKit must own the main thread: it runs the application loop (which serves the overlay
+/// windows) while the MCP server runs on a worker thread and exits the process when it is done.
+/// The app is an "accessory": no Dock icon, no menu bar, and it never takes keyboard focus.
+pub fn run_app<F>(f: F) -> i32
+where
+    F: FnOnce(Box<dyn Platform>) -> i32 + Send + 'static,
+{
+    let Some(mtm) = MainThreadMarker::new() else {
+        eprintln!("fastuse: must start on the main thread");
+        return 1;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    std::thread::spawn(move || {
+        let code = match MacPlatform::new() {
+            Ok(p) => f(Box::new(p)),
+            Err(e) => {
+                eprintln!("fastuse: {e}");
+                1
+            }
+        };
+        std::process::exit(code);
+    });
+    app.run();
+    0
 }

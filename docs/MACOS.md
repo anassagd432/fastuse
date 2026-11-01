@@ -45,7 +45,7 @@ Chromium/Electron expose a thin AX tree until accessibility is switched on for t
 
 Implemented in `src/platform/mac/`: window list (CoreGraphics), UI tree through the Accessibility API with one batched attribute call per element, `AXPress` clicks, setting `AXValue`, `fastuse doctor`. Titles show as `App — Window title` (just the app name until Screen Recording is granted), so `window="TextEdit"` works either way. Coordinates are points, not pixels.
 
-Not yet: typing, key presses, hotkeys, clicking at x,y (M2); screenshots and the agent cursor (M3). Those return a clear "not implemented yet" error. Use `set_value` for text fields.
+Not yet: typing, key presses, hotkeys, clicking at x,y (M2); screenshots (M3). Those return a clear "not implemented yet" error. Use `set_value` for text fields.
 
 ### Try it on a Mac
 

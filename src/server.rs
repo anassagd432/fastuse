@@ -240,6 +240,26 @@ impl Server {
         }
     }
 
+    /// `fastuse demo`: glide the agent cursor around the biggest window with two clicks, so you can
+    /// check the cursor, the screen-edge glow and the banner without an AI model.
+    pub fn demo(&self) {
+        let r = self
+            .p
+            .list_windows()
+            .iter()
+            .filter(|w| !w.minimized && w.rect.w() > 0)
+            .max_by_key(|w| w.rect.w() as i64 * w.rect.h() as i64)
+            .map(|w| w.rect)
+            .unwrap_or(crate::platform::Rect { left: 100, top: 100, right: 1100, bottom: 700 });
+        let at = |fx: f32, fy: f32| (r.left + (r.w() as f32 * fx) as i32, r.top + (r.h() as f32 * fy) as i32);
+        for (fx, fy, click) in [(0.5, 0.5, false), (0.2, 0.25, false), (0.8, 0.3, true), (0.7, 0.75, false), (0.3, 0.7, true), (0.5, 0.5, false)] {
+            let (x, y) = at(fx, fy);
+            self.p.move_cursor(x, y, click);
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(4));
+    }
+
     /// Let the user see the agent arrive at the window it is about to work on.
     fn show_agent(&self, w: &WindowInfo) {
         if !w.minimized && w.rect.w() > 0 {

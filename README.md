@@ -2,9 +2,9 @@
 
 Fast computer use for Windows, as an MCP server for [Antigravity](https://antigravity.google) (and any MCP client).
 
-**Status: Windows is supported. macOS is an early read-only preview (M1, untested on a real Mac yet); Linux is planned.** See [docs/MACOS.md](docs/MACOS.md) and [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
+**Status: Windows is supported. macOS is an early preview (reads and presses elements, shows the agent overlay; typing and screenshots are coming); Linux is planned.** See [docs/MACOS.md](docs/MACOS.md) and [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
 
-An agent can read an app window as a compact text tree, click, type, set fields and press keys, all in the background: your real mouse pointer and keyboard focus are never touched. The agent gets its own blue cursor so you can see where it acts.
+An agent can read an app window as a compact text tree, click, type, set fields and press keys, all in the background: your real mouse pointer and keyboard focus are never touched. While the agent works you see it: its own blue cursor, a soft glow around the screen edge and a small "this computer is being controlled by fastuse" banner at the top. Your real pointer is never touched.
 
 It is built to be fast. Reads and actions take milliseconds, and one `act` call does a whole task step (find window, run steps, return the new UI state), so the model needs far fewer round trips.
 
@@ -95,6 +95,7 @@ The input format is undocumented by Google and was found by probing; it may chan
 - Stale element tokens are rejected.
 - Do not point it at windows you do not want an agent to operate (email, banking). There is no per-app allowlist yet.
 - Agent cursor: a small brand-blue arrow (macOS-pointer sized, with a white outline and soft shadow) that glides to wherever the agent acts and ripples on click. It appears when the agent starts working on a window and fades after 8 s idle. It never moves your real pointer. `FASTUSE_CURSOR=0` turns it off; `FASTUSE_CURSOR_SYNC=1` makes each action wait (up to 0.8 s) until the cursor arrives, so every stop is visible (slower). The look is inspired by [cua-driver](https://github.com/trycua/cua)'s agent cursor (MIT); the code is our own.
+- Overlay: besides the cursor, a glow around each screen edge and a banner at the top show that an agent is in control. They fade after 15 s idle and are excluded from the screenshots the model sees (`FASTUSE_RECORDABLE=1` makes them visible to screen recorders, for demos). `FASTUSE_COLOR=#RRGGBB` sets your brand color (default blue `#2F6BFF`), `FASTUSE_BANNER="text"` changes the banner (`0` hides it), `FASTUSE_GLOW=0` keeps only the cursor. `fastuse demo` plays a short cursor tour so you can check how it looks without any AI model.
 
 ## Optional: standalone runner
 

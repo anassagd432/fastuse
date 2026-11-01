@@ -220,11 +220,6 @@ fn default() -> Result<Box<dyn Platform>, String> {
     Ok(Box::new(win::WinPlatform::new()?))
 }
 
-#[cfg(target_os = "macos")]
-fn default() -> Result<Box<dyn Platform>, String> {
-    Ok(Box::new(mac::MacPlatform::new()?))
-}
-
 #[cfg(not(any(windows, target_os = "macos")))]
 fn default() -> Result<Box<dyn Platform>, String> {
     Err("fastuse currently supports Windows only; macOS is next, then Linux (see docs/MACOS.md)".into())
@@ -233,9 +228,12 @@ fn default() -> Result<Box<dyn Platform>, String> {
 /// Run the application with this OS's backend.
 ///
 /// The backend is created and used on whichever thread `f` runs on. Windows runs `f` right here
-/// on the main thread. macOS will override this: AppKit (the agent cursor window) must own the
-/// main thread, so the macOS backend will start `f` on a worker thread, build the platform there,
-/// and run the main run loop itself.
+/// on the main thread. macOS (see mac::run_app) runs `f` on a worker thread and gives the main
+/// thread to AppKit, which the agent overlay windows need.
+#[cfg(target_os = "macos")]
+pub use mac::run_app;
+
+#[cfg(not(target_os = "macos"))]
 pub fn run_app<F>(f: F) -> i32
 where
     F: FnOnce(Box<dyn Platform>) -> i32 + Send + 'static,
