@@ -91,6 +91,19 @@ Tasks, on 4 pages (a Wikipedia article, a GitHub repo page, a search results pag
 
 Targets (to confirm against the baseline): state ≤ 60 ms on a typical page, ≤ half the tokens of the Playwright snapshot; click ≤ 15 ms excluding page load; batch of 5 steps ≤ 100 ms; zero model round trips more than needed.
 
+### B0 status (partial)
+
+Done: Claude in Chrome page output on two pages (interactive filter), measured through this session. Not done: latency of Claude in Chrome (I cannot time my own tool calls precisely from inside the session), and chrome-devtools-mcp / Playwright MCP, because this environment refused to run packages fetched by `npx` even after you approved it. The harness is ready (`bench/browser/mcp.py`, `bench/browser/probe_tools.py`); run it yourself or allow the command and I will.
+
+What Claude in Chrome returned (`read_page`, `filter: interactive`):
+
+| Page | Rows | Size | Observations |
+|---|---|---|---|
+| httpbin.org/forms/post (a 12-field form) | 13 | ~0.6 KB | Compact, but 5 of 12 fields have **no name** (`textbox [ref_1]`) because their labels are not associated with the input; no values, no coordinates |
+| github.com/anassagd432/fastuse | ~85 | ~8.7 KB | Many unnamed buttons and links (`button [ref_5]`), full `href`s on every link, repeated long commit-message links, no coordinates |
+
+Our design goals from this: name every element from its label, aria-label, placeholder, title, nearby text or `alt` (so a model never gets a nameless `textbox`), include current values and coordinates, shorten hrefs to path only, and collapse duplicate commit-message links. That should beat this output on usefulness at a similar or smaller size.
+
 ## 4. Milestones
 
 | # | What | Done when |
