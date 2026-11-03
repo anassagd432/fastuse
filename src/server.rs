@@ -5,12 +5,14 @@ use std::time::Instant;
 use base64::Engine;
 use serde_json::{json, Value};
 
+use crate::browser::Browser;
 use crate::imaging::{self, Cache};
 use crate::platform::{CaptureTarget, ClickKind, Platform, TreeRead, WindowInfo, WindowQuery};
 
 pub struct Server {
     p: Box<dyn Platform>,
     shots: Cache,
+    browser: Browser,
     /// Bumped on every tree read; element tokens are "s<snap>:<index>" and only the latest is valid.
     snap: u64,
 }
@@ -50,7 +52,7 @@ fn image(o: &imaging::Out) -> Value {
 
 impl Server {
     pub fn new(p: Box<dyn Platform>) -> Self {
-        Self { p, shots: Cache::default(), snap: 0 }
+        Self { p, shots: Cache::default(), browser: Browser::new(), snap: 0 }
     }
 
     pub fn platform_name(&self) -> &'static str {
@@ -363,6 +365,10 @@ impl Server {
                     Err(e) => err(e),
                 }
             }
+            "browser_state" => match self.browser.state(a) {
+                Ok(s) => text(s),
+                Err(e) => err(e),
+            },
             "act" | "run_steps" => match self.run_steps(a) {
                 Ok(s) => text(s),
                 Err(e) => err(e),

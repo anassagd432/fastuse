@@ -20,7 +20,10 @@ pub fn tools() -> Value {
         tool("list_windows","List visible windows: title, pid, window_id.", json!({})),
         tool("screenshot","Screenshot as JPEG: a window if window/window_id is given, otherwise the whole desktop (all monitors). region is [x,y,w,h] in that image's pixels.",
             json!({"window":win,"window_id":{"type":"integer"},"screen":{"type":"boolean","description":"force whole-desktop capture"},"region":{"type":"array","items":{"type":"integer"},"description":"[x,y,w,h]"},
-                   "max_dim":{"type":"integer"},"max_age_ms":{"type":"integer","description":"reuse a frame younger than this"}}))
+                   "max_dim":{"type":"integer"},"max_age_ms":{"type":"integer","description":"reuse a frame younger than this"}})),
+        tool("browser_state","Read the user's own browser (Chrome, Brave, Edge) through the fastuse extension: the tabs the user allowed and one page as a compact tree of headings and clickable elements. Only sites the user allowed (by clicking the extension icon) are visible. Use this, not the desktop tools, for anything inside a web page.",
+            json!({"tab":{"type":"integer","description":"tab id from the tab list; default: the active allowed tab"},
+                   "max_elements":{"type":"integer"},"text":{"type":"boolean","description":"also include paragraph and list text"}}))
     ]})
 }
 

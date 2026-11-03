@@ -119,6 +119,27 @@ Our design goals from this: name every element from its label, aria-label, place
 
 Windows comes first for this part because I can test it here; the extension is OS-independent, so the Mac work is mostly host registration paths and the socket.
 
+## B1 status (written; connection to a real browser NOT yet tried)
+
+Built: `extension/` (MV3 service worker `background.js`, page reader `reader.js`, manifest), `src/browser/` (native host, pipe, framing, installer), the `browser_state` tool, and `fastuse browser-install` / `browser-uninstall` / `doctor`.
+
+Verified without a browser:
+- Native messaging framing, host, named pipe (owner + SYSTEM only) and the MCP tool, end to end with a stand-in browser (`bench/browser/fake_browser.py`): about 1.3 ms per call, the host exits cleanly and removes its file.
+- The page reader, pasted into a normal tab and run on two real pages: a 12-field form gave 13 elements in 2.7 ms, every field named from its label (the Claude in Chrome baseline left 5 of 12 unnamed); this repo's GitHub page gave 96 elements, 0 nameless, in 4.8 ms, about 7.5 KB with coordinates and headings/landmarks.
+- Windows build, 20 unit tests, and a macOS type check (the Unix socket code).
+
+Not verified: the extension loading in Chrome or Brave, `connectNative`, the native host registration, the service worker staying alive for 10 minutes. `fastuse browser-install` was not run by me (the sandbox refused to write the browser registration). Brave reading its own registry key is still unknown.
+
+### Try it (Windows)
+
+```
+cargo build --release
+.	argeteleaseastuse.exe browser-install
+```
+1. Open `chrome://extensions` (or `brave://extensions`), turn on Developer mode, **Load unpacked**, choose the `extension` folder. The ID must be `andnpcpahlilpjlipaogpekbnljedfcb`.
+2. Open any page and click the fastuse icon in the toolbar: the badge shows **ON** and that site is allowed. Click again to stop.
+3. `.	argeteleaseastuse.exe doctor` should list the connected browser. Then call the `browser_state` tool from your agent (or `python bench/smoke.py`-style client).
+
 ## 5. Risks and unknowns
 
 | Risk | Plan |

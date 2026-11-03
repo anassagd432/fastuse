@@ -1,3 +1,4 @@
+mod browser;
 mod imaging;
 #[cfg(any(windows, target_os = "macos"))]
 mod overlay;
@@ -16,6 +17,26 @@ fn main() {
         println!("fastuse {}", env!("CARGO_PKG_VERSION"));
         return;
     }
+    let argv: Vec<String> = std::env::args().collect();
+    // the browser starts us as its native host; no desktop backend and nothing else on stdout
+    if browser::is_host_invocation(&argv) {
+        std::process::exit(browser::host_main());
+    }
+    let setup = match argv.get(1).map(|s| s.as_str()) {
+        Some("browser-install") => Some(browser::install()),
+        Some("browser-uninstall") => Some(browser::uninstall()),
+        _ => None,
+    };
+    if let Some(r) = setup {
+        match r {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("fastuse: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     std::process::exit(platform::run_app(app));
 }
 
@@ -24,7 +45,8 @@ fn app(p: Box<dyn platform::Platform>) -> i32 {
     let instructions = tools::instructions(srv.platform_name());
 
     if std::env::args().nth(1).as_deref() == Some("doctor") {
-        println!("{}", srv.doctor());
+        println!("{}
+{}", srv.doctor(), browser::doctor());
         return 0;
     }
 
