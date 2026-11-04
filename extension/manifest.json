@@ -2,11 +2,11 @@
   "manifest_version": 3,
   "name": "fastuse browser",
   "version": "0.0.1",
-  "description": "Lets your AI agent use your own browser quickly, on the sites you allow. Works with fastuse on your computer.",
+  "description": "Lets your AI agent use your own browser quickly, in its own tab group. Works with fastuse on your computer.",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAg+3WnQnfUeLApabombmaI5lX8EBO1i9tJIUF4KfWVAnVNecjad6RjkNkNG/PZZIdUccYA/d7GIZUg8JyK3UCPbCeCeJ8+KOhpDESTbt8ySdt5SvH3ImUBvmc0BQQ3YzQD+ebufmKlT/p6hMa0EdC/mPT5qnhItJnvxFiKdHuR3dNXYNUysamH2oj11FjgKBosb3WmXEMplDAr9T+ZP4anhwmaNuhhAVK3k4fcLDdw9/nDdyVm1TqnfsorsdR4d7olvN0cmQ+mj83XQrqnRq6y6Prv8TEs0XcBbUtC3N4dObG7IgThIeuH1oZ5lzA0wFPYyFf/7f+yxGrGGG/AiYfLQIDAQAB",
   "background": { "service_worker": "background.js", "type": "module" },
-  "permissions": ["nativeMessaging", "tabs", "scripting", "storage", "alarms"],
+  "permissions": ["nativeMessaging", "tabs", "tabGroups", "scripting", "storage", "alarms"],
   "host_permissions": ["<all_urls>"],
-  "action": { "default_title": "fastuse: click to allow or stop allowing this site" }
+  "action": { "default_title": "fastuse browser", "default_popup": "popup.html" }
 }

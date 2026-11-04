@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
@@ -235,12 +235,59 @@ impl Browser {
         self.snap += 1;
         Ok(format_state(&tabs, &st, &format!("s{:08}", self.snap)))
     }
+
+    /// `browser_act`: run steps in the agent's own tabs, then return the new page state.
+    pub fn act(&mut self, a: &Value) -> Result<String, String> {
+        let steps = a.get("steps").and_then(|s| s.as_array()).ok_or("steps is required")?;
+        let t0 = Instant::now();
+        let mut params = json!({
+            "steps": steps,
+            "snap": format!("s{:08}", self.snap),
+            "snap_next": format!("s{:08}", self.snap + 1),
+        });
+        for k in ["tab", "observe", "text"] {
+            if let Some(v) = a.get(k) {
+                params[k] = v.clone();
+            }
+        }
+        if let Some(n) = a.get("max_elements") {
+            params["max"] = n.clone();
+        }
+        let r = call("act.run", params, Duration::from_secs(120))?;
+        let failed = r.get("failed").and_then(|f| f.as_bool()).unwrap_or(false);
+        let mut out = format!(
+            "browser_act: {} step(s), {:.0} ms{}
+",
+            steps.len(),
+            t0.elapsed().as_secs_f64() * 1000.0,
+            if failed { " (stopped at failure)" } else { "" }
+        );
+        for l in r.get("log").and_then(|l| l.as_array()).into_iter().flatten() {
+            out += l.as_str().unwrap_or("");
+            out.push('\n');
+        }
+        if let Some(n) = r.get("note").and_then(|n| n.as_str()) {
+            out += &format!("note: {n}\n");
+        }
+        if let Some(st) = r.get("state") {
+            self.snap += 1;
+            let tabs = call("tabs.list", json!({}), Duration::from_secs(10))?;
+            let st = json!({"tab": st["tab"], "page": st["page"], "browser": r["browser"]});
+            out += "\n";
+            out += &format_state(&tabs, &st, &format!("s{:08}", self.snap));
+        }
+        if failed {
+            Err(out)
+        } else {
+            Ok(out)
+        }
+    }
 }
 
 fn format_tabs(tabs: &Value, selected: Option<i64>) -> String {
     let list = tabs.get("tabs").and_then(|t| t.as_array()).cloned().unwrap_or_default();
     let hidden = tabs.get("hidden").and_then(|h| h.as_i64()).unwrap_or(0);
-    let mut s = format!("tabs: {} allowed, {} other not shared with the agent\n", list.len(), hidden);
+    let mut s = format!("tabs: {} usable by the agent, {} others hidden from it\n", list.len(), hidden);
     for t in list {
         let id = t.get("id").and_then(|i| i.as_i64()).unwrap_or(0);
         s += &format!(
@@ -248,7 +295,11 @@ fn format_tabs(tabs: &Value, selected: Option<i64>) -> String {
             if Some(id) == selected { "*" } else { "-" },
             t.get("title").and_then(|x| x.as_str()).unwrap_or("").chars().take(80).collect::<String>().replace('"', "'"),
             t.get("url").and_then(|x| x.as_str()).unwrap_or("").chars().take(120).collect::<String>(),
-            if t.get("active").and_then(|a| a.as_bool()).unwrap_or(false) { " [active]" } else { "" }
+            match (t.get("owned").and_then(|a| a.as_bool()).unwrap_or(false), t.get("active").and_then(|a| a.as_bool()).unwrap_or(false)) {
+                (true, _) => " [agent tab]",
+                (false, true) => " [shared, active]",
+                (false, false) => " [shared]",
+            }
         );
     }
     s
@@ -266,7 +317,7 @@ fn format_state(tabs: &Value, st: &Value, snapshot: &str) -> String {
         format_tabs(tabs, selected)
     );
     s += &format!(
-        "page: tab={} \"{}\" {}\nviewport={}x{} scroll_y={}/{} elements={} rows={}{} snapshot_id={} read_ms={}\n\n",
+        "page: tab={} \"{}\" {}\nviewport={}x{} scroll_y={}/{} elements={} rows={}{} snapshot_id={} read_ms={}\nelement_token for row [N] = {}:N\n\n",
         tab["id"],
         page["title"].as_str().unwrap_or("").chars().take(80).collect::<String>().replace('"', "'"),
         page["url"].as_str().unwrap_or(""),
@@ -279,6 +330,7 @@ fn format_state(tabs: &Value, st: &Value, snapshot: &str) -> String {
         if page["truncated"].as_bool().unwrap_or(false) { " truncated=true" } else { "" },
         snapshot,
         page["ms"],
+        snapshot,
     );
     s += page["text"].as_str().unwrap_or("");
     s
@@ -319,9 +371,10 @@ mod tests {
             "page":{"title":"Docs","url":"https://a.test/","viewport":{"w":1000,"h":700,"scrollY":0,"pageH":2000},
                     "count":1,"rows":2,"truncated":false,"ms":4.2,"text":"- Heading[1] \"Docs\"\n- [0] Button \"Go\" @(1,2,3,4)"}});
         let s = format_state(&tabs, &st, "s00000001");
-        assert!(s.starts_with("browser: Brave (extension 0.0.1)\ntabs: 1 allowed, 3 other not shared"));
-        assert!(s.contains("* tab 7 \"Docs 'x'\" https://a.test/ [active]"));
+        assert!(s.starts_with("browser: Brave (extension 0.0.1)\ntabs: 1 usable by the agent, 3 others hidden"));
+        assert!(s.contains("* tab 7 \"Docs 'x'\" https://a.test/ [shared, active]"));
         assert!(s.contains("snapshot_id=s00000001"));
+        assert!(s.contains("element_token for row [N] = s00000001:N"));
         assert!(s.ends_with("- [0] Button \"Go\" @(1,2,3,4)"));
     }
 }

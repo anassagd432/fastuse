@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px system-ui, sans-serif; width: 280px; margin: 0; padding: 14px; color: #1b1f2a; }
+  h1 { font-size: 14px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #c0c4cc; }
+  .dot.on { background: #2F6BFF; box-shadow: 0 0 6px #2F6BFF; }
+  p { margin: 6px 0; color: #55607a; line-height: 1.4; }
+  button { width: 100%; margin-top: 8px; padding: 8px; border: 0; border-radius: 8px; background: #2F6BFF; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button.quiet { background: #eef1f8; color: #1b1f2a; }
+  button.stop { background: #d93b3b; }
+  small { display: block; margin-top: 10px; color: #8a93a8; }
+  @media (prefers-color-scheme: dark) { body { background: #1b1f2a; color: #e7eaf3; } p { color: #a5aec4; } button.quiet { background: #2a3042; color: #e7eaf3; } }
+</style>
+</head>
+<body>
+  <h1><span id="dot" class="dot"></span><span id="title">fastuse browser</span></h1>
+  <p id="status">…</p>
+  <button id="pause"></button>
+  <button id="share" class="quiet"></button>
+  <small>The agent works in its own “fastuse” tab group and never opens banking, payment or password sites.</small>
+  <script src="popup.js"></script>
+</body>
+</html>

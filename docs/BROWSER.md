@@ -137,8 +137,22 @@ cargo build --release
 .	argeteleaseastuse.exe browser-install
 ```
 1. Open `chrome://extensions` (or `brave://extensions`), turn on Developer mode, **Load unpacked**, choose the `extension` folder. The ID must be `andnpcpahlilpjlipaogpekbnljedfcb`.
-2. Open any page and click the fastuse icon in the toolbar: the badge shows **ON** and that site is allowed. Click again to stop.
+2. Nothing else to click: the agent opens its own tabs. (The toolbar popup can pause it or share a tab.)
 3. `.	argeteleaseastuse.exe doctor` should list the connected browser. Then call the `browser_state` tool from your agent (or `python bench/smoke.py`-style client).
+
+## B2 status: the agent works in its own tabs (no clicking per site)
+
+Changed from the first plan after testing: asking the user to click the icon on every site is not how Claude or ChatGPT behave, so it is not how we behave either.
+
+- The agent **opens its own tabs** (`browser_act` `navigate` / `new_tab`) in the user's own browser profile, so their logins apply. They go into a blue **"fastuse" tab group** and open in the background, so the user's focus and active tab are not touched. Links that open a new tab from an agent tab stay agent tabs.
+- The user's other tabs are **hidden** from the agent (only a count is reported) unless the user shares one in the popup.
+- A built-in **blocklist** keeps the agent away from logins, payments, banking and password managers (it refuses to open them or act on them, and says why). The agent never types into password or card fields.
+- The toolbar **popup** has a **Pause the agent** switch, a connection status, and "Share this tab's site".
+- Tools: `browser_act` (batched steps with the new page tree returned) and `browser_state`.
+
+Verified live on Brave (Windows): the agent opened a tab in 510 ms including page load; an 8-step batch (3 fills, a radio, 2 checkboxes, a textarea, submit and the resulting new page read) took 240 ms; a stale element reference, an unknown target and a blocked site each gave a clear error; closing the tab worked.
+
+Known limits: all in-page events are synthetic (`isTrusted` is false) until the debugger fallback in B4; Enter in a field submits its form but is not a real keypress; no cursor, glow or banner inside the page yet (B3); screenshots not yet (B4).
 
 ## 5. Risks and unknowns
 

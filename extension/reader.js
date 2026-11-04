@@ -1,5 +1,6 @@
 // Reads a page into the compact text tree fastuse uses everywhere:
 //   - [N] Role "name" value="..." id=x @(left,top,w,h)      ([N] and @ only for things the agent can act on)
+// The elements and their names stay in this frame (globalThis.__fastuse) so actions.js can resolve [N].
 // readPage is injected with chrome.scripting.executeScript({func: readPage}), so it must be
 // completely self-contained: it may not use anything defined outside its own body.
 
@@ -8,6 +9,7 @@ export function readPage(opts) {
   const max = Math.max(10, Math.min(opts.max || 250, 1000));
   const withText = !!opts.text;
   const refs = [];
+  const meta = [];
   const rows = [];
   let truncated = false;
   let interactive = 0;
@@ -159,6 +161,7 @@ export function readPage(opts) {
         const flags = el.disabled || el.getAttribute('aria-disabled') === 'true' ? 'disabled' : '';
         const id = el.id || el.getAttribute('data-testid') || el.getAttribute('name') || '';
         refs.push(el);
+        meta.push({ role: ROLE_LABEL[role] || role, name, id });
         interactive++;
         row(depth, refs.length - 1, ROLE_LABEL[role] || role, name, value, id !== name ? id : '',
           [Math.round(r.left + ox), Math.round(r.top + oy), Math.round(r.width), Math.round(r.height)], flags);
@@ -206,7 +209,7 @@ export function readPage(opts) {
 
   walk(document.documentElement, 0, 0, 0);
   // the isolated world of this frame keeps the elements so later calls can act on [N]
-  globalThis.__fastuseRefs = refs;
+  globalThis.__fastuse = { snap: opts.snap || '', refs, meta };
 
   const de = document.documentElement;
   return {

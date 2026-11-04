@@ -369,6 +369,10 @@ impl Server {
                 Ok(s) => text(s),
                 Err(e) => err(e),
             },
+            "browser_act" => match self.browser.act(a) {
+                Ok(s) => text(s),
+                Err(e) => err(e),
+            },
             "act" | "run_steps" => match self.run_steps(a) {
                 Ok(s) => text(s),
                 Err(e) => err(e),
