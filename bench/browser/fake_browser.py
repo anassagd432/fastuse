@@ -53,11 +53,12 @@ for _ in range(20):
     ts.append(t)
 ts.sort()
 print(f"20 more calls: p50={ts[10]:.1f} ms max={ts[-1]:.1f} ms")
-ok = (not is_err) and "FakeBrave" in text and '[0] Button "Go"' in text and seen[:2] == ["tabs.list", "page.state"]
+ok = (not is_err) and "FakeBrave" in text and '[0] Button "Go"' in text and set(seen[:2]) == {"tabs.list", "page.state"}
 m.close()
 host.stdin.close()
 time.sleep(0.5)
-gone = [f for f in os.listdir(os.path.join(os.environ["LOCALAPPDATA"], "fastuse", "hosts"))] if os.path.isdir(os.path.join(os.environ["LOCALAPPDATA"], "fastuse", "hosts")) else []
+hosts_dir = os.path.join(os.environ["LOCALAPPDATA"], "fastuse", "hosts")
+gone = [f for f in os.listdir(hosts_dir) if f == f"{host.pid}.json"] if os.path.isdir(hosts_dir) else []
 host.wait(timeout=5)
 print("host exit code", host.returncode, "| leftover host files:", gone)
 print("PASS" if ok and host.returncode == 0 and not gone else "FAIL")

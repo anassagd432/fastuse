@@ -107,6 +107,10 @@ pub trait Platform {
     fn hotkey(&mut self, w: &WindowInfo, keys: &str) -> Result<String, String>;
     /// (x, y) in window-local pixels. Returns how, e.g. "PostMessage (background)".
     fn click_point(&mut self, w: &WindowInfo, x: i32, y: i32, kind: ClickKind, foreground: bool) -> Result<String, String>;
+    /// Scroll `direction` ("up", "down", "left", "right") by `amount` ticks on element `el` or window `w`.
+    fn scroll(&mut self, _w: &WindowInfo, _el: Option<usize>, _direction: &str, _amount: i32) -> Result<String, String> {
+        Err(format!("scroll is not implemented on {}", self.name()))
+    }
 
     /// BGRA pixels. `screen_mode` asks for a screen-region grab instead of per-window rendering.
     fn grab(&mut self, t: CaptureTarget, screen_mode: bool) -> Result<Frame, String>;
@@ -138,15 +142,36 @@ pub fn center_in(meta: &[ElementMeta], i: usize) -> Option<(i32, i32)> {
     Some(((r[0] + r[2]) / 2, (r[1] + r[3]) / 2))
 }
 
-/// Resolve a human target ("Go", "Button:Go", an automation id) to an index into `meta`.
+/// Resolve a human target ("Go", "Button:Go", "[3]", "s00000001:3", or an automation id) to an index into `meta`.
 /// Exact name/id matches win over substring matches; ambiguity is an error that lists candidates.
 pub fn resolve_in(meta: &[ElementMeta], target: &str) -> Result<usize, String> {
     if meta.is_empty() {
         return Err("no snapshot yet; the window has no interactive elements or was not read".into());
     }
-    let (role, want) = match target.split_once(':') {
+    let t = target.trim();
+    if let Some(idx_str) = t.strip_prefix('[').and_then(|s| s.strip_suffix(']')).or_else(|| t.strip_prefix('#')) {
+        if let Ok(i) = idx_str.trim().parse::<usize>() {
+            return if i < meta.len() {
+                Ok(i)
+            } else {
+                Err(format!("no element [{i}] in snapshot"))
+            };
+        }
+    }
+    if let Some((sid, idx_str)) = t.split_once(':') {
+        if sid.starts_with('s') && sid.len() > 1 && sid[1..].chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(i) = idx_str.trim().parse::<usize>() {
+                return if i < meta.len() {
+                    Ok(i)
+                } else {
+                    Err(format!("no element [{i}] in snapshot"))
+                };
+            }
+        }
+    }
+    let (role, want) = match t.split_once(':') {
         Some((r, n)) if meta.iter().any(|m| m.role.eq_ignore_ascii_case(r)) => (Some(r), n),
-        _ => (None, target),
+        _ => (None, t),
     };
     let w = want.trim().to_lowercase();
     let ok_role = |i: usize| role.map_or(true, |r| meta[i].role.eq_ignore_ascii_case(r));
@@ -263,6 +288,10 @@ mod tests {
         assert_eq!(resolve_in(&m, "Button:Save").unwrap(), 0);
         assert_eq!(resolve_in(&m, "MenuItem:Save").unwrap(), 2);
         assert_eq!(resolve_in(&m, "as").unwrap(), 1); // unique substring
+        assert_eq!(resolve_in(&m, "[1]").unwrap(), 1);
+        assert_eq!(resolve_in(&m, "#2").unwrap(), 2);
+        assert_eq!(resolve_in(&m, "s00000001:0").unwrap(), 0);
+        assert!(resolve_in(&m, "[99]").is_err());
         assert!(resolve_in(&m, "nope").is_err());
         assert!(resolve_in(&[], "x").is_err());
     }

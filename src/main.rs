@@ -55,6 +55,25 @@ fn app(p: Box<dyn platform::Platform>) -> i32 {
         return 0;
     }
 
+    if std::env::args().nth(1).as_deref() == Some("call") {
+        let name = std::env::args().nth(2).unwrap_or_default();
+        let raw = std::env::args().nth(3).unwrap_or_else(|| "{}".into());
+        let args: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
+        let res = srv.call(&name, &args);
+        if let Some(items) = res.get("content").and_then(|c| c.as_array()) {
+            for item in items {
+                if let Some(t) = item.get("text").and_then(|t| t.as_str()) {
+                    println!("{t}");
+                } else {
+                    println!("{item}");
+                }
+            }
+        } else {
+            println!("{res}");
+        }
+        return if res.get("isError").and_then(|b| b.as_bool()).unwrap_or(false) { 1 } else { 0 };
+    }
+
     #[cfg(feature = "runner")]
     {
         let argv: Vec<String> = std::env::args().collect();

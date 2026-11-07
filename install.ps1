@@ -3,8 +3,7 @@
 #   irm https://github.com/anassagd432/fastuse/releases/latest/download/install.ps1 | iex
 #
 # Downloads the release zip, verifies its SHA256 against the release's SHA256SUMS, installs to
-# %LOCALAPPDATA%\Programs\fastuse, and registers the server with Antigravity (agy) if it is installed.
-# It does not touch PATH, does not add startup tasks, and does not edit permission settings.
+# %LOCALAPPDATA%\Programs\fastuse, and registers the server + OS/browser skill + auto-routing rule with Antigravity (agy).
 
 param(
     [string]$Repo = $(if ($env:FASTUSE_REPO) { $env:FASTUSE_REPO } else { "anassagd432/fastuse" }),
@@ -37,20 +36,45 @@ try {
     Copy-Item (Join-Path $stage "*") $dir -Recurse -Force
     $exe = Join-Path $dir "fastuse.exe"
     & $exe --version
+    & $exe browser-install | Out-Host
 
-    if (-not $NoAgy -and (Get-Command agy -ErrorAction SilentlyContinue)) {
-        Write-Host "==> registering with Antigravity"
-        agy mcp add fastuse $exe | Out-Host
-        $skills = Join-Path $env:USERPROFILE ".gemini\antigravity\global_skills\fastuse"
-        New-Item -ItemType Directory -Force $skills | Out-Null
-        Copy-Item (Join-Path $dir "skills\fastuse\SKILL.md") (Join-Path $skills "SKILL.md") -Force
-        Write-Host "==> skill installed to $skills"
-    } elseif (-not $NoAgy) {
-        Write-Host "agy not found; skipped Antigravity registration. Later: agy mcp add fastuse `"$exe`""
+    if (-not $NoAgy) {
+        if (Get-Command agy -ErrorAction SilentlyContinue) {
+            Write-Host "==> registering with Antigravity"
+            agy mcp add fastuse $exe | Out-Host
+        } else {
+            Write-Host "agy CLI not on PATH; installing skill and rule files directly (`agy mcp add fastuse `"$exe`"` can be run later)."
+        }
+        foreach ($skillRoot in @(
+            (Join-Path $env:USERPROFILE ".gemini\antigravity\global_skills\fastuse"),
+            (Join-Path $env:USERPROFILE ".gemini\config\skills\fastuse")
+        )) {
+            New-Item -ItemType Directory -Force $skillRoot | Out-Null
+            Copy-Item (Join-Path $dir "skills\fastuse\SKILL.md") (Join-Path $skillRoot "SKILL.md") -Force
+        }
+        $geminiMd = Join-Path $env:USERPROFILE ".gemini\config\GEMINI.md"
+        New-Item -ItemType Directory -Force (Split-Path $geminiMd) | Out-Null
+        $ruleBlock = @"
+
+<!-- FASTUSE_COMPUTER_USE_START -->
+## Default Computer Use & Browser Use Engine (`fastuse` MCP)
+`fastuse` (MCP server `fastuse`) is Antigravity's **primary, default Computer Use and Browser Use tool** on both Windows and macOS.
+The user never needs to mention `fastuse` by name. Automatically route requests as follows:
+1. **Browser tasks ("access my Brave browser tab", "check my Chrome tab", "click/fill/navigate on the page", "open this site in my browser"):**
+   - Immediately use MCP server `fastuse` tools `browser_state` and `browser_act`.
+   - Do **not** launch Playwright, Puppeteer, or headless CDP browsers when the user asks to read or interact with their browser tab.
+2. **Desktop / OS tasks ("do this on my computer", "operate <app>", "click/type/scroll in <window>", "what windows are open", "screenshot <window>"):**
+   - Immediately use MCP server `fastuse` tools `act`, `get_window_state`, `list_windows`, and `screenshot`.
+<!-- FASTUSE_COMPUTER_USE_END -->
+"@
+        $existing = if (Test-Path $geminiMd) { Get-Content $geminiMd -Raw } else { "" }
+        if ($existing -notmatch "FASTUSE_COMPUTER_USE_START") {
+            Add-Content -Path $geminiMd -Value $ruleBlock -Encoding UTF8
+        }
+        Write-Host "==> fastuse OS/browser skill and default routing rule installed for Antigravity"
     }
     Write-Host ""
     Write-Host "Installed to $dir"
-    Write-Host "Headless agy (-p / stream-json) auto-denies MCP calls unless you allow them. See the README, section 'Permissions'."
 }
 finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

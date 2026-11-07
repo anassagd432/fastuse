@@ -170,6 +170,19 @@ fn hosts() -> Vec<HostInfo> {
     v
 }
 
+/// Prune stale host files whose IPC endpoint is no longer listening, returning live hosts.
+fn live_hosts() -> Vec<HostInfo> {
+    let mut live = Vec::new();
+    for h in hosts() {
+        if ipc::connect(&h.endpoint).is_ok() {
+            live.push(h);
+        } else {
+            let _ = std::fs::remove_file(&h.path);
+        }
+    }
+    live
+}
+
 /// Ask the browser extension to run `method`. Stale host files are removed on the way.
 pub fn call(method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
     let hs = hosts();
@@ -230,8 +243,11 @@ impl Browser {
         if let Some(n) = a.get("max_elements") {
             params["max"] = n.clone();
         }
-        let tabs = call("tabs.list", json!({}), Duration::from_secs(10))?;
         let st = call("page.state", params, Duration::from_secs(30))?;
+        let tabs = match st.get("tabs") {
+            Some(t) if t.is_object() => t.clone(),
+            _ => call("tabs.list", json!({}), Duration::from_secs(10))?,
+        };
         self.snap += 1;
         Ok(format_state(&tabs, &st, &format!("s{:08}", self.snap)))
     }
@@ -256,8 +272,7 @@ impl Browser {
         let r = call("act.run", params, Duration::from_secs(120))?;
         let failed = r.get("failed").and_then(|f| f.as_bool()).unwrap_or(false);
         let mut out = format!(
-            "browser_act: {} step(s), {:.0} ms{}
-",
+            "browser_act: {} step(s), {:.0} ms{}\n",
             steps.len(),
             t0.elapsed().as_secs_f64() * 1000.0,
             if failed { " (stopped at failure)" } else { "" }
@@ -271,7 +286,10 @@ impl Browser {
         }
         if let Some(st) = r.get("state") {
             self.snap += 1;
-            let tabs = call("tabs.list", json!({}), Duration::from_secs(10))?;
+            let tabs = match r.get("tabs").or_else(|| st.get("tabs")) {
+                Some(t) if t.is_object() => t.clone(),
+                _ => call("tabs.list", json!({}), Duration::from_secs(10))?,
+            };
             let st = json!({"tab": st["tab"], "page": st["page"], "browser": r["browser"]});
             out += "\n";
             out += &format_state(&tabs, &st, &format!("s{:08}", self.snap));
@@ -338,7 +356,7 @@ fn format_state(tabs: &Value, st: &Value, snapshot: &str) -> String {
 
 /// For `fastuse doctor`.
 pub fn doctor() -> String {
-    let hs = hosts();
+    let hs = live_hosts();
     let mut s = String::from("Browser use:\n");
     s += &format!("  native host manifest: {}\n", install::status());
     if hs.is_empty() {

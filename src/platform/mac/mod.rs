@@ -23,17 +23,18 @@ use crate::platform::{
 pub struct MacPlatform {
     elements: Vec<ax::Owned>,
     meta: Vec<ElementMeta>,
+    last_pid: u32,
 }
 
 impl MacPlatform {
     pub fn new() -> Result<Self, String> {
         crate::overlay::init(overlay::MacSurface::new);
-        Ok(Self { elements: Vec::new(), meta: Vec::new() })
+        Ok(Self { elements: Vec::new(), meta: Vec::new(), last_pid: 0 })
     }
 }
 
-fn todo(what: &str, milestone: &str) -> String {
-    format!("{what} is not implemented on macOS yet (planned for {milestone}, see docs/MACOS.md)")
+fn raise_pid(pid: u32) -> bool {
+    ax::raise_app(pid as i32)
 }
 
 impl Platform for MacPlatform {
@@ -42,11 +43,12 @@ impl Platform for MacPlatform {
     }
 
     fn capabilities(&self) -> Capabilities {
+        let sr = unsafe { cg::CGPreflightScreenCaptureAccess() };
         Capabilities {
             background_input: true,
-            foreground_input: false,
-            window_capture: false,
-            desktop_capture: false,
+            foreground_input: true,
+            window_capture: sr,
+            desktop_capture: sr,
             overlay_cursor: crate::overlay::enabled(),
         }
     }
@@ -71,6 +73,7 @@ impl Platform for MacPlatform {
         let walk = ax::walk_window(&win, max_elements, max_depth);
         self.elements = walk.elements;
         self.meta = walk.meta;
+        self.last_pid = w.pid;
         Ok(TreeRead {
             text: walk.text,
             count: walk.count,
@@ -93,8 +96,22 @@ impl Platform for MacPlatform {
     }
 
     fn click_element(&mut self, i: usize) -> Result<String, String> {
+        let center = self.element_center(i);
+        let pid = self.last_pid;
         let el = self.elements.get(i).ok_or_else(|| format!("no element [{i}] in snapshot"))?;
-        ax::press(el).map(|s| s.to_string())
+        match ax::press(el) {
+            Ok(how) => Ok(how.to_string()),
+            Err(e) => {
+                if pid != 0 {
+                    if let Some((cx, cy)) = center {
+                        if let Ok(how) = cg::click_point(pid as i32, cx, cy, ClickKind::Single, false) {
+                            return Ok(format!("{how} (AX fallback)"));
+                        }
+                    }
+                }
+                Err(e)
+            }
+        }
     }
 
     fn set_value(&mut self, i: usize, value: &str) -> Result<(), String> {
@@ -102,24 +119,43 @@ impl Platform for MacPlatform {
         ax::set_value(el, value)
     }
 
-    fn type_text(&mut self, _w: Option<&WindowInfo>, _el: Option<usize>, _text: &str, _foreground: bool) -> Result<String, String> {
-        Err(todo("type_text", "M2") + ". Use set_value for text fields.")
+    fn type_text(&mut self, w: Option<&WindowInfo>, el: Option<usize>, text: &str, foreground: bool) -> Result<String, String> {
+        if let Some(e) = el.and_then(|i| self.elements.get(i)) {
+            ax::focus(e);
+        }
+        let pid = w.map(|w| w.pid).or(if self.last_pid != 0 { Some(self.last_pid) } else { None }).ok_or("type_text needs a window")?;
+        if foreground && !raise_pid(pid) {
+            return Err("could not activate the target app for foreground typing".into());
+        }
+        let n = cg::type_text(pid as i32, text, foreground);
+        Ok(format!("type_text {n} chars via CGEvent ({})", if foreground { "foreground" } else { "background" }))
     }
 
-    fn press_key(&mut self, _w: &WindowInfo, _key: &str) -> Result<String, String> {
-        Err(todo("press_key", "M2"))
+    fn press_key(&mut self, w: &WindowInfo, key: &str) -> Result<String, String> {
+        let k = cg::vk(key).ok_or_else(|| format!("unknown key '{key}'"))?;
+        cg::post_key(w.pid as i32, k, 0, false);
+        Ok(format!("press_key {key} via CGEventPostToPid (background)"))
     }
 
-    fn hotkey(&mut self, _w: &WindowInfo, _keys: &str) -> Result<String, String> {
-        Err(todo("hotkey", "M2"))
+    fn hotkey(&mut self, w: &WindowInfo, keys: &str) -> Result<String, String> {
+        let fg = raise_pid(w.pid);
+        cg::hotkey(w.pid as i32, keys, fg)?;
+        Ok(format!("hotkey {keys} via CGEvent ({})", if fg { "foreground" } else { "background" }))
     }
 
-    fn click_point(&mut self, _w: &WindowInfo, _x: i32, _y: i32, _kind: ClickKind, _foreground: bool) -> Result<String, String> {
-        Err(todo("clicking at x,y", "M2") + ". Click by element target instead.")
+    fn click_point(&mut self, w: &WindowInfo, x: i32, y: i32, kind: ClickKind, foreground: bool) -> Result<String, String> {
+        if foreground && !raise_pid(w.pid) {
+            return Err("could not activate the target app for foreground click".into());
+        }
+        cg::click_point(w.pid as i32, w.rect.left + x, w.rect.top + y, kind, foreground)
     }
 
-    fn grab(&mut self, _t: CaptureTarget, _screen_mode: bool) -> Result<Frame, String> {
-        Err(todo("screenshots", "M3"))
+    fn scroll(&mut self, w: &WindowInfo, _el: Option<usize>, direction: &str, amount: i32) -> Result<String, String> {
+        cg::scroll(w.pid as i32, direction, amount)
+    }
+
+    fn grab(&mut self, t: CaptureTarget, screen_mode: bool) -> Result<Frame, String> {
+        cg::grab(t, screen_mode)
     }
 
     fn move_cursor(&self, x: i32, y: i32, click: bool) {

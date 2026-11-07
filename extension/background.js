@@ -41,8 +41,12 @@ function blockedReason(url) {
 // ---- state: what is the agent allowed to use -------------------------------------------------
 
 async function settings() {
-  const { paused, shared } = await chrome.storage.local.get(['paused', 'shared']);
-  return { paused: !!paused, shared: Array.isArray(shared) ? shared : [] };
+  const { paused, shared, unshared } = await chrome.storage.local.get(['paused', 'shared', 'unshared']);
+  return {
+    paused: !!paused,
+    shared: Array.isArray(shared) ? shared : [],
+    unshared: Array.isArray(unshared) ? unshared : [],
+  };
 }
 
 async function sessionGet() {
@@ -67,22 +71,36 @@ function originOf(url) {
 async function controllable(tab) {
   const st = await settings();
   if (st.paused || !tab) return false;
-  if (blockedReason(tab.url || '')) return false;
+  const url = tab.url || '';
+  if (blockedReason(url)) return false;
   const ses = await sessionGet();
-  return ses.owned.includes(tab.id) || st.shared.includes(originOf(tab.url || ''));
+  if (ses.owned.includes(tab.id)) return true;
+  const orig = originOf(url);
+  if (!orig) return false;
+  return !st.unshared.includes(orig);
 }
 
 async function paintBadge(tab) {
   if (!tab || tab.id === undefined) return;
   const ses = await sessionGet();
   const st = await settings();
-  const text = st.paused ? '' : ses.owned.includes(tab.id) ? 'AI' : st.shared.includes(originOf(tab.url || '')) ? 'ON' : '';
+  const orig = originOf(tab.url || '');
+  const allowed = !st.paused && (ses.owned.includes(tab.id) || (orig && !blockedReason(tab.url || '') && !st.unshared.includes(orig)));
+  const text = !allowed ? '' : ses.owned.includes(tab.id) ? 'AI' : 'ON';
   chrome.action.setBadgeText({ tabId: tab.id, text });
   if (text) chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#2F6BFF' });
 }
 
 chrome.tabs.onUpdated.addListener((id, info, tab) => {
   if (info.url || info.status === 'complete') paintBadge(tab);
+});
+
+chrome.tabs.onActivated.addListener(async (info) => {
+  const t = await chrome.tabs.get(info.tabId).catch(() => null);
+  if (t && (await controllable(t))) {
+    const ses = await sessionGet();
+    await setOwned(ses.owned, t.id);
+  }
 });
 
 chrome.tabs.onRemoved.addListener(async (id) => {
@@ -172,13 +190,14 @@ async function currentTab() {
     const t = await chrome.tabs.get(ses.last).catch(() => null);
     if (t && (await controllable(t))) return t;
   }
+  const act = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  for (const t of act) if (await controllable(t)) return t;
   const all = await chrome.tabs.query({});
   for (const o of ses.owned) {
     const t = all.find((x) => x.id === o);
     if (t && (await controllable(t))) return t;
   }
-  const act = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  for (const t of [...act, ...all]) if (await controllable(t)) return t;
+  for (const t of all) if (await controllable(t)) return t;
   return null;
 }
 
@@ -199,7 +218,9 @@ async function read(tab, p) {
 }
 
 async function pageState(p) {
-  return read(await pickTab(p.tab), p);
+  const st = await read(await pickTab(p.tab), p);
+  st.tabs = await listTabs();
+  return st;
 }
 
 const TAB_TOOLS = new Set(['navigate', 'new_tab', 'close_tab', 'back', 'forward', 'reload', 'switch_tab']);
@@ -253,6 +274,7 @@ async function actRun(p) {
   let tab = p.tab !== undefined && p.tab !== null ? await pickTab(p.tab) : await currentTab();
   const log = [];
   let failed = false;
+  let needRead = false;
   let i = 0;
   while (i < steps.length && !failed) {
     const s = steps[i];
@@ -261,6 +283,7 @@ async function actRun(p) {
         const r = await tabStep(s, tab);
         tab = r.tab;
         if (tab) await setOwned((await sessionGet()).owned, tab.id);
+        needRead = true;
         log.push(i + 1 + '. ' + r.msg);
       } catch (e) {
         log.push(i + 1 + '. FAILED ' + s.tool + ': ' + (e && e.message ? e.message : e));
@@ -282,16 +305,44 @@ async function actRun(p) {
       failed = true;
       break;
     }
-    let out;
-    try {
-      const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: runSteps, args: [steps.slice(i, j)] });
-      out = res && res[0] && res[0].result;
-    } catch (e) {
-      out = { log: ['FAILED ' + s.tool + ': ' + (e && e.message ? e.message : e)], failed: true, done: 0 };
+    // If a navigation/tab step just ran, populate globalThis.__fastuse before running DOM steps
+    if (needRead) {
+      try {
+        await read(tab, { max: p.max, text: p.text, snap: p.snap });
+        needRead = false;
+      } catch (e) { /* runSteps will report if still unreadable */ }
     }
-    if (!out) out = { log: ['FAILED ' + s.tool + ': the page did not answer'], failed: true, done: 0 };
-    out.log.forEach((l, k) => log.push(i + k + 1 + '. ' + l));
-    failed = out.failed;
+    let cur = i;
+    let retried = false;
+    while (cur < j && !failed) {
+      let out;
+      try {
+        const res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: runSteps, args: [steps.slice(cur, j)] });
+        out = res && res[0] && res[0].result;
+      } catch (e) {
+        out = { log: ['FAILED ' + steps[cur].tool + ': ' + (e && e.message ? e.message : e)], failed: true, done: 0 };
+      }
+      if (!out) out = { log: ['FAILED ' + steps[cur].tool + ': the page did not answer'], failed: true, done: 0 };
+      const done = Number(out.done || 0);
+      if (out.failed && out.retryAfterRead && !retried) {
+        // Log the steps that succeeded before the missing/mutated target, refresh the page tree, and retry once
+        out.log.slice(0, done).forEach((l, k) => log.push(cur + k + 1 + '. ' + l));
+        cur += done;
+        retried = true;
+        tab = (await settle(tab.id)) || tab;
+        try {
+          await read(tab, { max: p.max, text: p.text, snap: p.snap });
+          continue;
+        } catch (e) {
+          log.push(cur + 1 + '. ' + (out.log[done] || 'FAILED'));
+          failed = true;
+          break;
+        }
+      }
+      out.log.forEach((l, k) => log.push(cur + k + 1 + '. ' + l));
+      failed = out.failed;
+      cur = j;
+    }
     i = j;
     if (!failed && tab) tab = (await settle(tab.id)) || tab;
   }
@@ -308,6 +359,7 @@ async function actRun(p) {
       }
     }
   }
+  result.tabs = await listTabs();
   return result;
 }
 
@@ -338,13 +390,13 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
     const ses = await sessionGet();
     if (m.type === 'toggle-pause') await chrome.storage.local.set({ paused: !st.paused });
     if (m.type === 'toggle-share' && m.origin) {
-      const next = st.shared.includes(m.origin) ? st.shared.filter((x) => x !== m.origin) : [...st.shared, m.origin];
-      await chrome.storage.local.set({ shared: next });
+      const next = st.unshared.includes(m.origin) ? st.unshared.filter((x) => x !== m.origin) : [...st.unshared, m.origin];
+      await chrome.storage.local.set({ unshared: next });
     }
     const now = await settings();
     const tabs = await chrome.tabs.query({});
     for (const t of tabs) paintBadge(t);
-    reply({ paused: now.paused, shared: now.shared, owned: ses.owned.length, connected: !!port, error: lastError, browser: browserName, version: VERSION });
+    reply({ paused: now.paused, shared: now.shared, unshared: now.unshared, owned: ses.owned.length, connected: !!port, error: lastError, browser: browserName, version: VERSION });
   })();
   return true;
 });

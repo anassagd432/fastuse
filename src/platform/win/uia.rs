@@ -131,23 +131,15 @@ impl Uia {
             *truncated = true;
             return;
         }
-        *count += 1;
         let ct = el.CachedControlType().map(|c| c.0).unwrap_or(0);
         let name = el.CachedName().map(|b| b.to_string()).unwrap_or_default();
         let aid = el.CachedAutomationId().map(|b| b.to_string()).unwrap_or_default();
+        let offscreen = el.CachedIsOffscreen().map(|b| b.as_bool()).unwrap_or(false);
         let rect = el
             .CachedBoundingRectangle()
             .ok()
             .map(|r| Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom });
         let is_int = interactive(ct);
-        let mut idx = None;
-        if is_int {
-            let i = self.elements.len();
-            self.elements.push(el.clone());
-            let b = rect.unwrap_or_default();
-            self.meta.push(ElementMeta { name: name.clone(), id: aid.clone(), role: type_name(ct), rect: [b.left, b.top, b.right, b.bottom] });
-            idx = Some(i);
-        }
         let mut value = String::new();
         if ct == 50004 || ct == 50030 {
             if let Ok(p) = el.GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
@@ -156,13 +148,41 @@ impl Uia {
                 }
             }
         }
-        tree_row(out, depth, idx, type_name(ct), &name, &value, &aid, if is_int { rect } else { None });
+        let kids = el.GetCachedChildren().ok();
+        let n_kids = kids.as_ref().and_then(|k| k.Length().ok()).unwrap_or(0);
+
+        // Skip offscreen leaf nodes so hidden items do not exhaust the element budget or shadow visible controls
+        if offscreen && n_kids == 0 && depth > 0 {
+            return;
+        }
+        // Collapse unnamed structural wrappers (Pane, Group, generic Element) so deep DOM/WPF trees stay compact
+        let is_wrapper = matches!(ct, 50026 | 50033 | 0) || type_name(ct) == "Element";
+        if depth > 0 && !is_int && is_wrapper && name.is_empty() && value.is_empty() && aid.is_empty() {
+            if let Some(kids) = kids {
+                for i in 0..n_kids {
+                    if let Ok(k) = kids.GetElement(i) {
+                        self.walk(&k, depth, max_depth, max, count, truncated, out);
+                    }
+                }
+            }
+            return;
+        }
+
+        *count += 1;
+        let mut idx = None;
+        if is_int && !offscreen {
+            let i = self.elements.len();
+            self.elements.push(el.clone());
+            let b = rect.unwrap_or_default();
+            self.meta.push(ElementMeta { name: name.clone(), id: aid.clone(), role: type_name(ct), rect: [b.left, b.top, b.right, b.bottom] });
+            idx = Some(i);
+        }
+        tree_row(out, depth, idx, type_name(ct), &name, &value, &aid, if idx.is_some() { rect } else { None });
         if depth + 1 >= max_depth {
             return;
         }
-        if let Ok(kids) = el.GetCachedChildren() {
-            let n = kids.Length().unwrap_or(0);
-            for i in 0..n {
+        if let Some(kids) = kids {
+            for i in 0..n_kids {
                 if let Ok(k) = kids.GetElement(i) {
                     self.walk(&k, depth + 1, max_depth, max, count, truncated, out);
                 }

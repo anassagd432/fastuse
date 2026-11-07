@@ -81,7 +81,12 @@ export function readPage(opts) {
       if (['button', 'submit', 'reset'].includes(ty)) n = el.value;
       else if (ty === 'image') n = el.alt;
     }
-    if (!n && (role === 'textbox' || role === 'combobox' || role === 'searchbox')) n = el.getAttribute('placeholder');
+    if (!n && (role === 'textbox' || role === 'combobox' || role === 'searchbox')) {
+      n = el.getAttribute('placeholder') || el.getAttribute('aria-placeholder');
+      if (!n && el.previousElementSibling && el.previousElementSibling.tagName === 'LABEL') {
+        n = el.previousElementSibling.textContent;
+      }
+    }
     if (!n) n = el.getAttribute('title');
     if (!n && tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA') {
       n = el.textContent;
@@ -158,7 +163,12 @@ export function readPage(opts) {
       if (r.width > 0 && r.height > 0) {
         const name = nameOf(el, role);
         const value = valueOf(el, role);
-        const flags = el.disabled || el.getAttribute('aria-disabled') === 'true' ? 'disabled' : '';
+        const exp = el.getAttribute('aria-expanded');
+        const flagList = [];
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true') flagList.push('disabled');
+        if (exp === 'true') flagList.push('expanded');
+        else if (exp === 'false') flagList.push('collapsed');
+        const flags = flagList.join(' ');
         const id = el.id || el.getAttribute('data-testid') || el.getAttribute('name') || '';
         refs.push(el);
         meta.push({ role: ROLE_LABEL[role] || role, name, id });

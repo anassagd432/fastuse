@@ -73,8 +73,19 @@ impl Platform for WinPlatform {
     }
 
     fn click_element(&mut self, i: usize) -> Result<String, String> {
+        let center = self.uia.center_of(i);
         let el = self.uia.element(i).ok_or_else(|| format!("no element [{i}] in snapshot"))?;
-        input::invoke(el).map(|s| s.to_string())
+        match input::invoke(el) {
+            Ok(how) => Ok(how.to_string()),
+            Err(e) => {
+                if let Some((cx, cy)) = center {
+                    if let Ok(how) = input::click_screen_bg(cx, cy) {
+                        return Ok(format!("{how} (UIA fallback)"));
+                    }
+                }
+                Err(e)
+            }
+        }
     }
 
     fn set_value(&mut self, i: usize, value: &str) -> Result<(), String> {
@@ -83,6 +94,11 @@ impl Platform for WinPlatform {
     }
 
     fn type_text(&mut self, w: Option<&WindowInfo>, el: Option<usize>, text: &str, foreground: bool) -> Result<String, String> {
+        if let Some(u) = el.and_then(|i| self.uia.element(i)) {
+            unsafe {
+                let _ = u.SetFocus();
+            }
+        }
         if foreground {
             let w = w.ok_or("foreground typing needs a window")?;
             if !input::raise(w.id as isize) {
@@ -122,6 +138,13 @@ impl Platform for WinPlatform {
             kind == ClickKind::Right,
             foreground,
         )
+    }
+
+    fn scroll(&mut self, w: &WindowInfo, el: Option<usize>, direction: &str, amount: i32) -> Result<String, String> {
+        let (sx, sy) = el
+            .and_then(|i| self.uia.center_of(i))
+            .unwrap_or(((w.rect.left + w.rect.right) / 2, (w.rect.top + w.rect.bottom) / 2));
+        input::scroll_xy(w.id as isize, sx, sy, direction, amount)
     }
 
     fn grab(&mut self, t: CaptureTarget, screen_mode: bool) -> Result<Frame, String> {

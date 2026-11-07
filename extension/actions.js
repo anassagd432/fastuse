@@ -13,26 +13,97 @@ export async function runSteps(steps) {
   const lc = (s) => (s || '').toLowerCase();
   const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
+  function moveOverlay(x, y, isClick) {
+    try {
+      let ui = globalThis.__fastuseOverlay;
+      if (!ui || !ui.host || !ui.host.isConnected) {
+        const host = document.createElement('div');
+        host.setAttribute('data-fastuse-overlay', '1');
+        host.setAttribute('aria-hidden', 'true');
+        host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;overflow:hidden;';
+        const root = host.attachShadow({ mode: 'closed' });
+        root.innerHTML = `
+          <style>
+            .frame { position:fixed; inset:0; pointer-events:none; box-shadow:inset 0 0 28px rgba(47,107,255,0.42), inset 0 0 2px rgba(47,107,255,0.85); transition:opacity .25s ease; }
+            .pill { position:fixed; top:10px; left:50%; transform:translateX(-50%); background:rgba(29,66,158,0.92); border:1px solid rgba(151,181,255,0.65); color:#fff; font:600 12px/28px system-ui,-apple-system,sans-serif; padding:0 16px; border-radius:999px; box-shadow:0 4px 14px rgba(0,0,0,0.22); white-space:nowrap; }
+            .cur { position:fixed; left:0; top:0; width:28px; height:28px; pointer-events:none; transition:transform .16s cubic-bezier(.22,1,.36,1), opacity .25s ease; filter:drop-shadow(0 2px 5px rgba(47,107,255,0.55)); }
+            .ring { position:fixed; left:0; top:0; width:26px; height:26px; margin:-13px 0 0 -13px; border:2px solid #2F6BFF; border-radius:50%; opacity:0; pointer-events:none; }
+            .ring.pop { animation:fu-pop .32s ease-out; }
+            @keyframes fu-pop { 0% { transform:translate(var(--x),var(--y)) scale(.35); opacity:.85; } 100% { transform:translate(var(--x),var(--y)) scale(1.45); opacity:0; } }
+          </style>
+          <div class="frame"><div class="pill">This browser tab is being controlled by fastuse</div></div>
+          <div class="ring"></div>
+          <svg class="cur" viewBox="0 0 24 24"><path d="M2 2 L2 19 L6.2 14.8 L9.3 21.5 L12.2 20.2 L9.2 13.5 L15 13.5 Z" fill="#2F6BFF" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        `;
+        (document.documentElement || document.body).appendChild(host);
+        ui = globalThis.__fastuseOverlay = {
+          host,
+          frame: root.querySelector('.frame'),
+          cur: root.querySelector('.cur'),
+          ring: root.querySelector('.ring'),
+          timer: null,
+        };
+      }
+      ui.frame.style.opacity = '1';
+      ui.cur.style.opacity = '1';
+      ui.cur.style.transform = `translate(${Math.round(x - 2)}px, ${Math.round(y - 2)}px)`;
+      if (isClick) {
+        ui.ring.style.setProperty('--x', `${Math.round(x)}px`);
+        ui.ring.style.setProperty('--y', `${Math.round(y)}px`);
+        ui.ring.classList.remove('pop');
+        void ui.ring.offsetWidth;
+        ui.ring.classList.add('pop');
+      }
+      clearTimeout(ui.timer);
+      ui.timer = setTimeout(() => {
+        if (ui.frame) ui.frame.style.opacity = '0';
+        if (ui.cur) ui.cur.style.opacity = '0';
+      }, 6000);
+    } catch (e) { /* overlay is cosmetic */ }
+  }
+
+  function retryErr(msg) {
+    const e = new Error(msg);
+    e.retryAfterRead = true;
+    return e;
+  }
+
   function byName(target) {
     const meta = S.meta;
+    const t = String(target).trim();
+    const bracket = t.startsWith('[') && t.endsWith(']') ? t.slice(1, -1) : t.startsWith('#') ? t.slice(1) : null;
+    if (bracket !== null && /^\d+$/.test(bracket.trim())) {
+      const idx = parseInt(bracket.trim(), 10);
+      if (idx >= 0 && idx < meta.length) return idx;
+      throw retryErr('no element [' + idx + '] in snapshot');
+    }
     let role = null;
-    let want = target;
-    const c = target.indexOf(':');
-    if (c > 0 && meta.some((m) => lc(m.role) === lc(target.slice(0, c)))) {
-      role = lc(target.slice(0, c));
-      want = target.slice(c + 1);
+    let want = t;
+    const c = t.indexOf(':');
+    if (c > 0) {
+      const prefix = t.slice(0, c);
+      if (/^s\d+$/.test(prefix) && /^\d+$/.test(t.slice(c + 1).trim())) {
+        if (prefix !== S.snap) throw new Error('stale element_token ' + t + ': latest snapshot is ' + S.snap + '; read the page again');
+        const idx = parseInt(t.slice(c + 1).trim(), 10);
+        if (idx >= 0 && idx < meta.length) return idx;
+        throw retryErr('no element [' + idx + '] in snapshot');
+      }
+      if (meta.some((m) => lc(m.role) === lc(prefix))) {
+        role = lc(prefix);
+        want = t.slice(c + 1);
+      }
     }
     const w = lc(want.trim());
     const all = meta.map((_, i) => i).filter((i) => !role || lc(meta[i].role) === role);
     let hits = all.filter((i) => lc(meta[i].name) === w || lc(meta[i].id) === w);
     if (!hits.length) hits = all.filter((i) => lc(meta[i].name).includes(w) || lc(meta[i].id).includes(w));
     if (hits.length === 1) return hits[0];
-    if (!hits.length) throw new Error("no element matches target '" + target + "'");
+    if (!hits.length) throw retryErr("no element matches target '" + target + "'");
     throw new Error("target '" + target + "' is ambiguous: " + hits.slice(0, 6).map((i) => '[' + i + '] ' + meta[i].role + ' "' + meta[i].name + '"').join(', ') + '. Use Role:Name or an element_token.');
   }
 
   function resolve(step) {
-    if (!S) throw new Error('this page has not been read yet (or it reloaded): read it again first');
+    if (!S) throw retryErr('this page has not been read yet (or it reloaded): read it again first');
     const tok = step.element_token !== undefined ? step.element_token : step.ref;
     let idx;
     if (tok !== undefined && tok !== null) {
@@ -46,7 +117,7 @@ export async function runSteps(steps) {
       return null;
     }
     const el = S.refs[idx];
-    if (!el || !el.isConnected) throw new Error('element [' + idx + '] is no longer on the page; read it again');
+    if (!el || !el.isConnected) throw retryErr('element [' + idx + '] is no longer on the page; read it again');
     return { el, idx, m: S.meta[idx] };
   }
 
@@ -64,6 +135,7 @@ export async function runSteps(steps) {
     const r = el.getBoundingClientRect();
     const x = r.left + r.width / 2;
     const y = r.top + r.height / 2;
+    moveOverlay(x, y, true);
     const win = el.ownerDocument.defaultView || window;
     const o = { bubbles: true, cancelable: true, composed: true, view: win, clientX: x, clientY: y, button: kind === 'right' ? 2 : 0, buttons: 1 };
     const fire = (t, C) => el.dispatchEvent(new C(t, o));
@@ -159,12 +231,14 @@ export async function runSteps(steps) {
         if (!r) throw new Error('click needs a target or element_token');
         const note = covered(r.el) ? ' (note: another element covers it; the click was sent to the element itself)' : '';
         await click(r.el, t === 'double_click' ? 'double' : t === 'right_click' ? 'right' : 'single');
+        if (i + 1 < steps.length) await sleep(30);
         log.push('ok: ' + t + ' ' + label(r) + note);
       } else if (t === 'hover') {
         const r = resolve(s);
         if (!r) throw new Error('hover needs a target');
         r.el.scrollIntoView({ block: 'center' });
         const b = r.el.getBoundingClientRect();
+        moveOverlay(b.left + b.width / 2, b.top + b.height / 2, false);
         const o = { bubbles: true, composed: true, clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 };
         r.el.dispatchEvent(new MouseEvent('mouseover', o));
         r.el.dispatchEvent(new MouseEvent('mousemove', o));
@@ -175,24 +249,40 @@ export async function runSteps(steps) {
         const r = resolve(s);
         const el = r ? r.el : S && document.activeElement;
         if (!el || el === document.body) throw new Error(t + ' needs a target (or a focused field)');
+        const b = el.getBoundingClientRect();
+        if (b.width > 0) moveOverlay(b.left + b.width / 2, b.top + b.height / 2, false);
         setText(el, text, t === 'type');
         log.push('ok: ' + t + ' ' + (r ? label(r) : 'focused field') + ' (' + text.length + ' chars)');
       } else if (t === 'select') {
         const r = resolve(s);
-        if (!r || r.el.tagName !== 'SELECT') throw new Error('select needs a target that is a dropdown (Combobox)');
-        const want = lc(String(s.value !== undefined ? s.value : s.text));
-        const opt = Array.from(r.el.options).find((o) => lc(o.text.trim()) === want || lc(o.value) === want) ||
-          Array.from(r.el.options).find((o) => lc(o.text).includes(want));
-        if (!opt) throw new Error('no option "' + want + '"; options: ' + Array.from(r.el.options).slice(0, 8).map((o) => o.text.trim()).join(' | '));
-        r.el.value = opt.value;
-        r.el.dispatchEvent(new Event('input', { bubbles: true }));
-        r.el.dispatchEvent(new Event('change', { bubbles: true }));
-        log.push('ok: select ' + label(r) + ' = "' + cut(opt.text.trim(), 40) + '"');
+        if (!r) throw new Error('select needs a target');
+        const want = lc(String(s.value !== undefined ? s.value : s.text).trim());
+        if (r.el.tagName === 'SELECT') {
+          const opt = Array.from(r.el.options).find((o) => lc(o.text.trim()) === want || lc(o.value) === want) ||
+            Array.from(r.el.options).find((o) => lc(o.text).includes(want));
+          if (!opt) throw new Error('no option "' + want + '"; options: ' + Array.from(r.el.options).slice(0, 8).map((o) => o.text.trim()).join(' | '));
+          const b = r.el.getBoundingClientRect();
+          moveOverlay(b.left + b.width / 2, b.top + b.height / 2, true);
+          r.el.value = opt.value;
+          r.el.dispatchEvent(new Event('input', { bubbles: true }));
+          r.el.dispatchEvent(new Event('change', { bubbles: true }));
+          log.push('ok: select ' + label(r) + ' = "' + cut(opt.text.trim(), 40) + '"');
+        } else {
+          // Custom ARIA combobox/dropdown: click trigger, wait for options, click matching option
+          await click(r.el, 'single');
+          await sleep(80);
+          const opts = Array.from(document.querySelectorAll('[role="option"], [role="menuitem"], [role="menuitemradio"], listbox option'));
+          const opt = opts.find((o) => lc(o.textContent.trim()) === want) || opts.find((o) => lc(o.textContent).includes(want));
+          if (!opt) throw new Error('no option "' + want + '" in custom dropdown');
+          await click(opt, 'single');
+          log.push('ok: select ' + label(r) + ' = "' + cut(opt.textContent.trim(), 40) + '"');
+        }
       } else if (t === 'press') {
         if (!s.key) throw new Error('press needs key, e.g. "Enter"');
         const r = s.target || s.element_token || s.ref !== undefined ? resolve(s) : null;
         const el = r ? r.el : document.activeElement || document.body;
         press(el, s.key);
+        if (i + 1 < steps.length) await sleep(25);
         log.push('ok: press ' + s.key + (r ? ' on ' + label(r) : ''));
       } else if (t === 'scroll') {
         const r = s.target || s.element_token || s.ref !== undefined ? resolve(s) : null;
@@ -226,7 +316,7 @@ export async function runSteps(steps) {
       }
     } catch (e) {
       log.push('FAILED ' + t + ': ' + (e && e.message ? e.message : e));
-      return { log, failed: true, done: i };
+      return { log, failed: true, done: i, retryAfterRead: !!(e && e.retryAfterRead && (i > 0 || !S)) };
     }
   }
   return { log, failed: false, done: steps.length };

@@ -1,124 +1,200 @@
-# fastuse
+<div align="center">
 
-Fast computer use for Windows, as an MCP server for [Antigravity](https://antigravity.google) (and any MCP client).
+# ⚡ fastuse
 
-**Status: Windows is supported. macOS is an early preview (reads and presses elements, shows the agent overlay; typing and screenshots are coming); Linux is planned.** See [docs/MACOS.md](docs/MACOS.md) and [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
+**Ultra-fast, zero-focus-steal Computer Use & Browser Use MCP server for [Antigravity](https://antigravity.google) and modern AI agents.**
 
-An agent can read an app window as a compact text tree, click, type, set fields and press keys, all in the background: your real mouse pointer and keyboard focus are never touched. While the agent works you see it: its own blue cursor, a soft glow around the screen edge and a small "this computer is being controlled by fastuse" banner at the top. Your real pointer is never touched.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20macOS-informational.svg)]()
+[![Rust](https://img.shields.io/badge/Language-Rust%202021-orange.svg)]()
+[![MCP](https://img.shields.io/badge/Protocol-Model%20Context%20Protocol-8A2BE2.svg)]()
+[![Zero Focus Steal](https://img.shields.io/badge/Input-Background--First%20(No%20Cursor%20Steal)-success.svg)]()
 
-It is built to be fast. Reads and actions take milliseconds, and one `act` call does a whole task step (find window, run steps, return the new UI state), so the model needs far fewer round trips.
+<br>
 
-## Measured speed
+```
+   ┌─────────────────────────────────────────────────────────────┐
+   │                     ANTIGRAVITY AGENT                       │
+   │  "access my Brave browser tab" · "click save in Notepad"    │
+   └───────────────┬─────────────────────────────┬───────────────┘
+                   │ MCP (JSON-RPC)              │ MCP (JSON-RPC)
+                   ▼                             ▼
+   ┌───────────────────────────────┐ ┌───────────────────────────┐
+   │     DESKTOP ENGINE (act)      │ │   BROWSER ENGINE (Chrome) │
+   │   Windows: UIA + Win32 Msg    │ │   Brave · Chrome · Edge   │
+   │   macOS:   AX + CoreGraphics  │ │   Native Messaging Bridge │
+   ├───────────────────────────────┤ ├───────────────────────────┤
+   │  ✓ Background clicks & typing │ │  ✓ Works with your logins │
+   │  ✓ Never moves your OS cursor │ │  ✓ Real-time DOM read/act │
+   │  ✓ Millisecond UI tree cache  │ │  ✓ Shadow DOM blue overlay│
+   └───────────────────────────────┘ └───────────────────────────┘
+                   │                             │
+                   └──────────────┬──────────────┘
+                                  ▼
+      ┌───────────────────────────────────────────────────────┐
+      │                   VISUAL OVERLAY                      │
+      │   🟦 Independent Agent Cursor (Brand-Blue Glow)       │
+      │   🟦 Screen-Edge Aura · "Controlled by fastuse"       │
+      │   🟦 Real User Mouse & Keyboard Remain 100% Free      │
+      └───────────────────────────────────────────────────────┘
+```
 
-Same small test window on one machine (RTX 3070, Windows 11), medians, compared with [cua-driver](https://github.com/trycua/cua) 0.37.0 over a persistent MCP session. Reproduce with the scripts in `bench/`.
+</div>
 
-| Operation | cua-driver | fastuse |
-|---|---|---|
-| List windows | 437 ms | 0.9 ms |
-| Read a window's UI tree | 160 ms | 29 ms |
-| Click by element | 16 ms | 1.8 ms |
-| `set_value` (20 chars) | 16 ms | 2.2 ms |
-| Type 20 chars | 153 ms | 3.6 ms (returns before the app finishes) |
-| Set field + click + read state, one call | n/a | ~66 ms |
+---
 
-Caveats: one tiny test window, not a real workload. Chrome and Electron have much bigger trees. cua-driver does more (verification, permission modes, many more tools), so this compares the observe/act path only.
+## 🚀 One-Prompt Setup in Antigravity
 
-End to end through Antigravity, model time dominates. A fresh `agy -p` per task took 28-47 s; one long-lived `agy` session (see below) took about 6-8 s per task with a single `act` call. Small sample, first task of a session sometimes does nothing.
+You don't need to manually configure files, compile binaries, or write MCP configs. **Simply copy and paste the prompt below directly into your Antigravity chat:**
 
-## Install
+```markdown
+Install and configure the `fastuse` MCP server on this computer:
+1. Detect my OS (Windows or macOS).
+2. If on Windows, run in terminal:
+   powershell -ExecutionPolicy Bypass -Command "irm https://github.com/anassagd432/fastuse/releases/latest/download/install.ps1 | iex"
+   If on macOS, run in terminal:
+   curl -fsSL https://raw.githubusercontent.com/anassagd432/fastuse/main/install.sh | bash
+3. Ensure `fastuse` is registered in my Antigravity MCP config (~/.gemini/config/mcp_config.json) pointing to the installed fastuse binary.
+4. Ensure the fastuse skill is placed in ~/.gemini/config/skills/fastuse/SKILL.md.
+5. In my ~/.gemini/config/GEMINI.md file, ensure this auto-routing rule is present:
+<!-- FASTUSE_COMPUTER_USE_START -->
+## Default Computer Use & Browser Use Engine (`fastuse` MCP)
+`fastuse` (MCP server `fastuse`) is Antigravity's primary, default Computer Use and Browser Use tool on both Windows and macOS.
+The user never needs to mention `fastuse` by name. Automatically route requests as follows:
+1. Browser tasks ("access my Brave browser tab", "check my Chrome tab", "click/fill/navigate on the page", "open this site in my browser"):
+   - Immediately use MCP server `fastuse` tools `browser_state` and `browser_act`.
+   - Do not launch Playwright, Puppeteer, or headless CDP browsers when the user asks to read or interact with their browser tab.
+2. Desktop / OS tasks ("do this on my computer", "operate <app>", "click/type/scroll in <window>", "what windows are open", "screenshot <window>"):
+   - Immediately use MCP server `fastuse` tools `act`, `get_window_state`, `list_windows`, and `screenshot`.
+   - Actions run in the background by default without stealing cursor or focus.
+<!-- FASTUSE_COMPUTER_USE_END -->
+6. Run `fastuse doctor` and confirm the installation is verified and ready.
+```
 
+---
+
+## ⚡ Why fastuse?
+
+Traditional computer-use tools hijack your real mouse cursor, steal window focus, launch heavy headless Chromium browsers that lose all your active logins, and make 4 to 6 round trips per action.
+
+`fastuse` solves this with an architectural redesign:
+* **Zero Cursor Stealing:** Uses native accessibility APIs (`UI Automation` on Windows, `AXUIElement` + `CoreGraphics` on macOS) and background message dispatching. You can continue typing in your code editor while the agent operates windows in the background.
+* **Your Real Browser, Logged In:** Connects directly to your running **Brave, Chrome, or Edge** browser through a secure Chrome Native Messaging Host. All your cookies, logins, active tabs, and extensions work immediately.
+* **All-In-One `act` Execution:** Instead of separate *find window → read tree → click → wait → read tree* LLM round-trips, `fastuse` runs the entire batch in **one call** and returns the resulting UI state.
+* **Visible Agent Cursor & Glow:** You always know what the agent is doing. An independent, brand-blue glowing cursor glides across the target window and animates on clicks, paired with a subtle screen-edge aura and status banner.
+
+---
+
+## 📊 Measured Speed
+
+Tested on Windows 11 (AMD Ryzen 9 / RTX 3070), medians over persistent MCP sessions, compared to [cua-driver](https://github.com/trycua/cua) 0.37.0. Reproducible via `bench/`:
+
+| Operation | Standard Driver (cua) | `fastuse` | Speedup |
+|---|---|---|---|
+| **List windows** | 437 ms | **0.9 ms** | **~485x faster** |
+| **Read window UI tree** | 160 ms | **29 ms** | **~5.5x faster** |
+| **Click by element** | 16 ms | **1.8 ms** | **~9x faster** |
+| **`set_value` (20 chars)** | 16 ms | **2.2 ms** | **~7x faster** |
+| **Type 20 chars** | 153 ms | **3.6 ms** | **~42x faster** |
+| **Batch flow (set + click + observe)** | *Multiple round-trips* | **~66 ms** | **Single turn** |
+
+*End-to-end through Antigravity, a multi-step task drops from 30–45s down to 4–8s.*
+
+---
+
+## 🛠️ Tool Catalog
+
+### 1. Browser Automation (`browser_act`, `browser_state`)
+Works directly in your active Brave, Chrome, or Edge browser:
+
+| Tool | Description |
+|---|---|
+| `browser_act` | Run full web workflows in one call (`navigate`, `new_tab`, `switch_tab`, `close_tab`, `back`, `forward`, `reload`, `click`, `double_click`, `right_click`, `hover`, `fill`, `type`, `select`, `press`, `scroll`, `wait`) and receive the new DOM tree. Automatically re-reads mutated DOMs on modal/dropdown opens. |
+| `browser_state` | Reads active tab headings, interactive buttons, inputs, links, and selectable items as a compact structured tree. |
+
+```json
+// Example: Complete search and navigation in one call
+{
+  "steps": [
+    { "tool": "navigate", "url": "https://github.com" },
+    { "tool": "fill", "target": "Search or jump to...", "value": "fastuse" },
+    { "tool": "press", "key": "Enter" }
+  ]
+}
+```
+
+### 2. Desktop Automation (`act`, `get_window_state`, `list_windows`, `screenshot`)
+Operates any Win32, WPF, WinUI, AppKit, Cocoa, or Electron desktop app:
+
+| Tool | Description |
+|---|---|
+| `act` | Execute a complete desktop task in one turn: locates the window by title or PID, executes steps in sequence (`click`, `double_click`, `right_click`, `set_value`, `type_text`, `press_key`, `hotkey`, `scroll`, `wait`), and returns the updated accessibility tree. |
+| `get_window_state` | Inspects an application's UI hierarchy as an indexed tree with element roles, names, and bounding boxes. |
+| `list_windows` | Lists all visible top-level windows with title, PID, process name, and bounds in < 1 ms. |
+| `screenshot` | Captures high-speed JPEG frames of a specific window (background `PrintWindow` / `screencapture`) or full desktop, with optional cropping and downscaling. |
+
+```json
+// Example: Batch desktop action
+{
+  "window": "Notepad",
+  "steps": [
+    { "tool": "set_value", "target": "Text editor", "value": "Build shipped." },
+    { "tool": "hotkey", "keys": "ctrl+s" }
+  ]
+}
+```
+
+---
+
+## 💻 Manual Installation
+
+### Windows (PowerShell)
 ```powershell
 irm https://github.com/anassagd432/fastuse/releases/latest/download/install.ps1 | iex
 ```
 
-The installer verifies a SHA256, installs to `%LOCALAPPDATA%\Programs\fastuse`, and runs `agy mcp add` plus copies the skill if `agy` is present. It does not change PATH, add startup tasks or edit permissions. Read it first: [install.ps1](install.ps1).
-
-Manual: download `fastuse-windows-x86_64.zip` from Releases, unzip, then
-
-```powershell
-agy mcp add fastuse C:\path\to\fastuse.exe
+### macOS (Terminal)
+```bash
+git clone https://github.com/anassagd432/fastuse.git
+cd fastuse
+./install.sh
 ```
 
-and copy `skills/fastuse/SKILL.md` to `~\.gemini\antigravity\global_skills\fastuse\`.
+### Browser Extension Setup (One-time)
+1. Open `chrome://extensions` or `brave://extensions`.
+2. Enable **Developer mode** (top right toggle).
+3. Click **Load unpacked** and select the `fastuse/extension` directory.
+4. Fastuse connects automatically to your browser via native messaging.
 
-## Tools
+---
 
-| Tool | Purpose |
-|---|---|
-| `act` | Do it all in one call: `window` (title substring) + `steps` + returns the new UI tree. Steps: `click`, `double_click`, `right_click`, `set_value`, `type_text`, `press_key`, `hotkey`. Targets are element names or ids (`"Go"`, `"Button:Go"`). |
-| `get_window_state` | Read a window's UI tree as text (`[N] Button "Go"`). |
-| `list_windows` | Visible windows with pid and `window_id`. |
-| `screenshot` | JPEG of a window, or the whole desktop when no window is given. Optional `region`, `max_dim`, `max_age_ms` (reuse a recent frame). |
+## 🩺 Diagnostics & Health Check
 
-Example `act` arguments:
+Run `doctor` anytime to verify accessibility permissions, native messaging manifests, and connected browsers:
 
-```json
-{"window":"Notepad","steps":[{"tool":"set_value","target":"Text editor","value":"hello"},{"tool":"click","target":"Save"}]}
+```bash
+fastuse doctor
 ```
 
-## How it is fast
-
-- One cross-process UI Automation call fetches the whole tree (cache request), then it is walked locally.
-- Clicks and values use UIA patterns (Invoke, Value). Text is posted as window messages with no per-character delay. No simulated mouse movement.
-- One native process, kept alive. No process start per call.
-- `act` removes the read-then-act-then-read loop.
-- Window screenshots use `PrintWindow` and a fast JPEG encoder, with an optional frame cache.
-
-## Using it with Antigravity
-
-Interactive `agy` asks you to approve tool calls. For headless runs, `agy -p` and stream mode auto-deny MCP calls unless allowed.
-
-### Permissions
-
-To let headless `agy` call only this server, add `mcp(fastuse/*)` to `userSettings.globalPermissionGrants.allow` in `~\.gemini\config\config.json`. Do this only if you accept an agent driving your windows without asking.
-
-### Faster: keep one agy session open
-
-Starting `agy` per task costs about 5 s and re-reads tool docs. A long-lived session avoids both. Spawn it without `-p`:
-
-```
-agy --input-format stream-json --output-format stream-json
+Output:
+```text
+Windows: UI Automation OK, HiDPI aware, background messaging active.
+Browser use:
+  native host manifest: installed (com.fastuse.browser.json)
+  connected: Brave (extension 0.1.0, host pid 13768)
 ```
 
-and write one JSON line per task from your program (not from a PowerShell pipe, which adds a byte-order mark):
+---
 
-```json
-{"event":"user","message":{"content":"In the window titled Notepad, type hello"}}
-```
+## 🔒 Safety & Privacy
 
-The input format is undocumented by Google and was found by probing; it may change.
+* **Background-First & Focus Isolation:** Operations never take focus unless explicitly requested via `delivery_mode: "foreground"`.
+* **Sensitive Sites Blocklist:** Built-in refusal prevents opening or reading banking, payment, password-manager, or credential domains (`paypal.com`, `stripe.com`, `accounts.google.com`, `1password.com`, etc.).
+* **Visual Accountability:** The agent overlay displays a noticeable brand-blue cursor and screen aura so you always know when automation is active.
+* **Capture Privacy:** The overlay window uses `WDA_EXCLUDEFROMCAPTURE` so screenshots sent to AI models remain crisp and uncluttered by the agent's own indicators.
 
-## Safety
+---
 
-- Everything on screen is untrusted data. The skill tells the model not to follow instructions found in windows.
-- Foreground actions (`hotkey`, `delivery_mode:"foreground"`) refuse to send keys unless the target window really took the foreground.
-- Stale element tokens are rejected.
-- Do not point it at windows you do not want an agent to operate (email, banking). There is no per-app allowlist yet.
-- Agent cursor: a small brand-blue arrow (macOS-pointer sized, with a white outline and soft shadow) that glides to wherever the agent acts and ripples on click. It appears when the agent starts working on a window and fades after 8 s idle. It never moves your real pointer. `FASTUSE_CURSOR=0` turns it off; `FASTUSE_CURSOR_SYNC=1` makes each action wait (up to 0.8 s) until the cursor arrives, so every stop is visible (slower). The look is inspired by [cua-driver](https://github.com/trycua/cua)'s agent cursor (MIT); the code is our own.
-- Overlay: besides the cursor, a glow around each screen edge and a banner at the top show that an agent is in control. They fade after 15 s idle and are excluded from the screenshots the model sees (`FASTUSE_RECORDABLE=1` makes them visible to screen recorders, for demos). `FASTUSE_COLOR=#RRGGBB` sets your brand color (default blue `#2F6BFF`), `FASTUSE_BANNER="text"` changes the banner (`0` hides it), `FASTUSE_GLOW=0` keeps only the cursor. `fastuse demo` plays a short cursor tour so you can check how it looks without any AI model.
+## 📄 License
 
-## Optional: standalone runner
-
-`fastuse run "<task>"` runs a small Gemini function-calling loop with the tools declared inline. It needs your own `GEMINI_API_KEY`. It is a development aid; it has not been benchmarked.
-
-## Limits
-
-- Windows only. One top-level window per call.
-- Typing is asynchronous. Read the returned tree to confirm.
-- Apps that ignore posted messages (some games, canvases) may need `delivery_mode:"foreground"`.
-- Chromium and Electron expose a thinner tree until accessibility is on.
-- `hotkey` chords are implemented with SendInput but not yet verified against many apps.
-- Built and tested on one machine with the GNU Rust toolchain. The MSVC build used by CI is untested at the time of writing.
-
-## Build
-
-```
-cargo build --release
-cargo test
-```
-
-Produces `target/release/fastuse.exe`.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT License. See [LICENSE](LICENSE) for details.

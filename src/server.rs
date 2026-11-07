@@ -120,15 +120,41 @@ impl Server {
         if (fg || name == "hotkey") && !caps.foreground_input {
             return Err(format!("foreground input is not available on {} in this session", self.p.name()));
         }
-        if !fg && name != "hotkey" && name != "set_value" && !caps.background_input {
+        if !fg && name != "hotkey" && name != "set_value" && name != "wait" && !caps.background_input {
             return Err("background input is not available here; retry with delivery_mode:\"foreground\"".into());
         }
         let patched;
         let a = match (arg_s(a, "target"), arg_s(a, "element_token")) {
             (Some(t), None) => {
-                let i = self.p.resolve_target(t)?;
+                let t = t.trim();
+                let tok = if let Some((sid, _)) = t.split_once(':') {
+                    if sid.starts_with('s') && sid.len() > 1 && sid[1..].chars().all(|c| c.is_ascii_digit()) {
+                        self.tok_index(t)?;
+                        Some(t.to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let tok = match tok {
+                    Some(tok) => tok,
+                    None => {
+                        let i = match self.p.resolve_target(t) {
+                            Ok(i) => i,
+                            Err(_) => {
+                                // Step N-1 may have opened a menu/dialog or mutated the UI: re-read once and retry
+                                if let Ok(w) = self.resolve(a) {
+                                    let _ = self.read(&w, 250, 25);
+                                }
+                                self.p.resolve_target(t)?
+                            }
+                        };
+                        format!("s{:08}:{}", self.snap, i)
+                    }
+                };
                 let mut v = a.clone();
-                v["element_token"] = json!(format!("s{:08}:{}", self.snap, i));
+                v["element_token"] = json!(tok);
                 patched = v;
                 &patched
             }
@@ -191,6 +217,46 @@ impl Server {
                 let k = arg_s(a, "keys").ok_or("hotkey needs keys, e.g. \"ctrl+a\"")?;
                 let w = self.resolve(a)?;
                 self.p.hotkey(&w, k)
+            }
+            "scroll" => {
+                let dir = arg_s(a, "direction").unwrap_or("down");
+                let amt = arg_i(a, "amount").unwrap_or(3) as i32;
+                let el = match arg_s(a, "element_token") {
+                    Some(tok) => {
+                        let i = self.tok_index(tok)?;
+                        if let Some((cx, cy)) = self.p.element_center(i) {
+                            self.p.move_cursor(cx, cy, false);
+                        }
+                        Some(i)
+                    }
+                    None => None,
+                };
+                let w = self.resolve(a)?;
+                self.p.scroll(&w, el, dir, amt)
+            }
+            "wait" => {
+                if let Some(want) = arg_s(a, "text") {
+                    let w = self.resolve(a)?;
+                    let limit = arg_i(a, "timeout").unwrap_or(5000).clamp(100, 15000) as u64;
+                    let t0 = Instant::now();
+                    let want_lc = want.to_lowercase();
+                    loop {
+                        let (r, _) = self.read(&w, 250, 25)?;
+                        if r.text.to_lowercase().contains(&want_lc) {
+                            return Ok(format!("waited for text \"{want}\" ({:.0} ms)", t0.elapsed().as_secs_f64() * 1000.0));
+                        }
+                        if t0.elapsed().as_millis() as u64 >= limit {
+                            return Err(format!("text \"{want}\" did not appear within {limit} ms"));
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(80));
+                    }
+                }
+                let ms = arg_i(a, "ms").unwrap_or(500).clamp(0, 10000) as u64;
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                if let Ok(w) = self.resolve(a) {
+                    let _ = self.read(&w, 250, 25);
+                }
+                Ok(format!("waited {ms} ms"))
             }
             _ => Err(format!("unknown tool {name}")),
         }

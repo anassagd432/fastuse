@@ -14,9 +14,10 @@ function paint(s) {
       : 'Not connected to fastuse' + (s.error ? ' (' + s.error + ')' : '') + '. Run “fastuse browser-install”, then reload this extension.';
   $('pause').textContent = s.paused ? 'Let the agent work again' : 'Pause the agent';
   $('pause').className = s.paused ? '' : 'stop';
-  const shared = origin && s.shared.includes(origin);
+  const unshared = Array.isArray(s.unshared) ? s.unshared : [];
+  const shared = origin && !unshared.includes(origin);
   $('share').style.display = origin ? '' : 'none';
-  $('share').textContent = shared ? 'Stop sharing this site' : 'Share this tab’s site with the agent';
+  $('share').textContent = shared ? 'Block agent on this site' : 'Allow agent on this site';
 }
 
 (async () => {

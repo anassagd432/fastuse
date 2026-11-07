@@ -34,6 +34,7 @@ struct CGSize {
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
+    static kCFBooleanTrue: CFTypeRef;
     fn AXIsProcessTrusted() -> u8;
     fn AXUIElementCreateApplication(pid: i32) -> AxRef;
     fn AXUIElementCopyAttributeValue(el: AxRef, attr: CFStringRef, value: *mut CFTypeRef) -> i32;
@@ -259,11 +260,9 @@ fn walk(el: AxRef, attrs: &CFArray<CFString>, depth: usize, max_depth: usize, ma
         w.truncated = true;
         return;
     }
-    w.count += 1;
     let mut vals: CFArrayRef = ptr::null();
     let e = unsafe { AXUIElementCopyMultipleAttributeValues(el, attrs.as_concrete_TypeRef(), 0, &mut vals) };
     if e != 0 || vals.is_null() {
-        tree_row(&mut w.text, depth, None, "Element", "", "", "", None);
         return;
     }
     let vals = Owned(vals as CFTypeRef);
@@ -306,8 +305,27 @@ fn walk(el: AxRef, attrs: &CFArray<CFString>, depth: usize, max_depth: usize, ma
         _ => None,
     };
     let show_value = if role == "Edit" || role == "Document" { value } else { String::new() };
+
+    // Collapse unnamed structural wrappers so deep Cocoa/Electron/WebKit trees do not exhaust max_elements
+    let is_wrapper = matches!(role, "Group" | "Pane" | "Element");
+    if depth > 0 && !interactive && is_wrapper && name.is_empty() && show_value.is_empty() && ident.is_empty() {
+        if let Some(kids) = item(7) {
+            unsafe {
+                let ka = kids.0 as CFArrayRef;
+                if CFGetTypeID(kids.0) == core_foundation_sys::array::CFArrayGetTypeID() {
+                    for i in 0..CFArrayGetCount(ka) {
+                        walk(CFArrayGetValueAtIndex(ka, i), attrs, depth, max_depth, max, w);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    w.count += 1;
     let mut idx = None;
-    if interactive {
+    let has_bounds = rect.map_or(true, |r| r.w() > 0 && r.h() > 0);
+    if interactive && has_bounds {
         let i = w.elements.len();
         if let Some(o) = Owned::retain(el) {
             w.elements.push(o);
@@ -316,7 +334,7 @@ fn walk(el: AxRef, attrs: &CFArray<CFString>, depth: usize, max_depth: usize, ma
             idx = Some(i);
         }
     }
-    tree_row(&mut w.text, depth, idx, role, &name, &show_value, &ident, if interactive { rect } else { None });
+    tree_row(&mut w.text, depth, idx, role, &name, &show_value, &ident, if idx.is_some() { rect } else { None });
     if depth + 1 >= max_depth {
         return;
     }
@@ -361,8 +379,26 @@ pub fn press(el: &Owned) -> Result<&'static str, String> {
     Err(ax_err(last))
 }
 
+/// Focus an accessibility element inside its window without activating the app.
+pub fn focus(el: &Owned) {
+    let a = CFString::new("AXFocused");
+    unsafe {
+        let _ = AXUIElementSetAttributeValue(el.0, a.as_concrete_TypeRef(), kCFBooleanTrue);
+    }
+}
+
+/// Bring the app owning `pid` to the foreground via AXFrontmost.
+pub fn raise_app(pid: i32) -> bool {
+    let Some(app) = app_element(pid) else { return false };
+    let a = CFString::new("AXFrontmost");
+    let ok = unsafe { AXUIElementSetAttributeValue(app.0, a.as_concrete_TypeRef(), kCFBooleanTrue) == 0 };
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    ok
+}
+
 /// Set the element's AXValue to a string (text fields, text areas).
 pub fn set_value(el: &Owned, value: &str) -> Result<(), String> {
+    focus(el);
     let a = CFString::new("AXValue");
     let v = CFString::new(value);
     let e = unsafe { AXUIElementSetAttributeValue(el.0, a.as_concrete_TypeRef(), v.as_CFTypeRef()) };

@@ -41,11 +41,12 @@ Chromium/Electron expose a thin AX tree until accessibility is switched on for t
 - Windows-only dependencies are now target-specific and the Gemini runner is an optional feature (`runner`, on by default).
 - The portable core type-checks for macOS from a Windows PC with `cargo check --target aarch64-apple-darwin --no-default-features` (needs `rustup target add aarch64-apple-darwin`). This checks types only: no linking, no running. With the runner feature the check fails on Windows because `ring` needs a C cross-compiler.
 
-## M1 status (written, type-checked, NOT yet run on a Mac)
+## M1–M3 status (implemented and type-checked for `aarch64-apple-darwin`)
 
-Implemented in `src/platform/mac/`: window list (CoreGraphics), UI tree through the Accessibility API with one batched attribute call per element, `AXPress` clicks, setting `AXValue`, `fastuse doctor`. Titles show as `App — Window title` (just the app name until Screen Recording is granted), so `window="TextEdit"` works either way. Coordinates are points, not pixels.
-
-Not yet: typing, key presses, hotkeys, clicking at x,y (M2); screenshots (M3). Those return a clear "not implemented yet" error. Use `set_value` for text fields.
+Implemented in `src/platform/mac/`:
+- **M1:** Window list (`CGWindowListCopyWindowInfo`), UI tree through the Accessibility API with one batched attribute call per element (collapsing unnamed wrapper groups/panes), `AXPress` clicks (with automatic fallback to `CGEventPostToPid` coordinate click at element center), `AXFocused` + `AXValue` setting, and `fastuse doctor`.
+- **M2:** Background typing (`CGEventKeyboardSetUnicodeString` posted via `CGEventPostToPid`), single keys (`press_key`), modifier chords (`hotkey`, e.g. `cmd+s`, `cmd+t`), coordinate clicks (`click_point` single/double/right), and `scroll` (`CGEventCreateScrollWheelEvent2`).
+- **M3:** Window (`screencapture -x -t bmp -l <window_id>`) and desktop screenshots decoded into `Frame` for cropping, downscaling, frame caching, and JPEG encoding, plus the `NSWindow` cursor, screen-edge glow, and top banner overlay.
 
 ### Try it on a Mac
 

@@ -7,6 +7,7 @@ use std::mem::size_of;
 use windows::core::BSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -18,12 +19,23 @@ fn h(hwnd: isize) -> HWND {
 /// Bring `top` to the foreground and confirm it. Foreground input must never land in another window.
 pub fn raise(top: isize) -> bool {
     unsafe {
+        if GetForegroundWindow() == h(top) {
+            return true;
+        }
+        let fg = GetForegroundWindow();
+        let fg_tid = if !fg.0.is_null() { GetWindowThreadProcessId(fg, None) } else { 0 };
+        let my_tid = GetCurrentThreadId();
+        let attached = fg_tid != 0 && fg_tid != my_tid && AttachThreadInput(my_tid, fg_tid, true).as_bool();
         for _ in 0..20 {
             if GetForegroundWindow() == h(top) {
-                return true;
+                break;
             }
+            let _ = BringWindowToTop(h(top));
             let _ = SetForegroundWindow(h(top));
             std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if attached {
+            let _ = AttachThreadInput(my_tid, fg_tid, false);
         }
         GetForegroundWindow() == h(top)
     }
@@ -47,6 +59,10 @@ pub fn invoke(el: &IUIAutomationElement) -> Result<&'static str, String> {
         if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId) {
             p.Expand().map_err(|e| e.to_string())?;
             return Ok("ExpandCollapsePattern");
+        }
+        if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(UIA_LegacyIAccessiblePatternId) {
+            p.DoDefaultAction().map_err(|e| e.to_string())?;
+            return Ok("LegacyIAccessiblePattern");
         }
     }
     Err("element supports no click-like UIA pattern; retry with x,y".into())
@@ -252,6 +268,49 @@ pub fn click_xy(top: isize, left: i32, topy: i32, x: i32, y: i32, double: bool, 
             let _ = PostMessageW(Some(target), up, WPARAM(0), lp);
         }
         Ok("PostMessage (background)".into())
+    }
+}
+
+/// Background click at screen pixel (sx, sy), finding the deepest child of the ancestor root window.
+pub fn click_screen_bg(sx: i32, sy: i32) -> Result<String, String> {
+    unsafe {
+        let w = WindowFromPoint(POINT { x: sx, y: sy });
+        if w.0.is_null() {
+            return Err("no window under element center".into());
+        }
+        let top = GetAncestor(w, GA_ROOT);
+        let root = if top.0.is_null() { w } else { top };
+        let mut r = Default::default();
+        let _ = GetWindowRect(root, &mut r);
+        click_xy(root.0 as isize, r.left, r.top, sx - r.left, sy - r.top, false, false, false)
+    }
+}
+
+/// Scroll at screen point (sx, sy) inside `top` via posted WM_MOUSEWHEEL / WM_MOUSEHWHEEL.
+pub fn scroll_xy(top: isize, sx: i32, sy: i32, direction: &str, amount: i32) -> Result<String, String> {
+    unsafe {
+        let mut target = h(top);
+        loop {
+            let mut pt = POINT { x: sx, y: sy };
+            let _ = ScreenToClient(target, &mut pt);
+            let c = ChildWindowFromPointEx(target, pt, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT);
+            if c.0.is_null() || c == target {
+                break;
+            }
+            target = c;
+        }
+        let ticks = amount.max(1);
+        let (msg, delta) = match direction.to_ascii_lowercase().as_str() {
+            "up" => (WM_MOUSEWHEEL, 120 * ticks),
+            "down" => (WM_MOUSEWHEEL, -120 * ticks),
+            "right" => (WM_MOUSEHWHEEL, 120 * ticks),
+            "left" => (WM_MOUSEHWHEEL, -120 * ticks),
+            other => return Err(format!("unknown scroll direction '{other}' (use up, down, left, right)")),
+        };
+        let wp = WPARAM(((delta as i16 as u16 as usize) << 16) & 0xffff_0000);
+        let lp = LPARAM((((sy as isize) & 0xffff) << 16) | ((sx as isize) & 0xffff));
+        let _ = PostMessageW(Some(target), msg, wp, lp);
+        Ok(format!("scroll {direction} {ticks} via WM_MOUSEWHEEL (background)"))
     }
 }
 
