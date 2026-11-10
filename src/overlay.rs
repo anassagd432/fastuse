@@ -23,7 +23,7 @@ pub const TIP: f32 = 20.0;
 pub const RIPPLE_FRAMES: usize = 7;
 const K: f32 = 1.12; // arrow scale (logical): about the size of the macOS pointer
 const CURSOR_IDLE: Duration = Duration::from_secs(8);
-const FRAME_IDLE: Duration = Duration::from_secs(15);
+const DEFAULT_FRAME_IDLE: Duration = Duration::from_secs(30);
 const DEFAULT_COLOR: (f32, f32, f32) = (47.0, 107.0, 255.0);
 
 pub fn parse_hex(s: &str) -> Option<(f32, f32, f32)> {
@@ -295,11 +295,14 @@ pub trait Surface {
     fn pump(&mut self) {}
 }
 
-struct Msg {
-    x: i32,
-    y: i32,
-    click: bool,
-    ack: Option<mpsc::Sender<()>>,
+enum Msg {
+    Glide {
+        x: i32,
+        y: i32,
+        click: bool,
+        ack: Option<mpsc::Sender<()>>,
+    },
+    Active(bool),
 }
 
 static TX: OnceLock<mpsc::Sender<Msg>> = OnceLock::new();
@@ -331,12 +334,27 @@ pub fn go(x: i32, y: i32, click: bool) {
     let Some(tx) = TX.get() else { return };
     if SYNC.get().copied().unwrap_or(false) {
         let (atx, arx) = mpsc::channel();
-        if tx.send(Msg { x, y, click, ack: Some(atx) }).is_ok() {
+        if tx.send(Msg::Glide { x, y, click, ack: Some(atx) }).is_ok() {
             let _ = arx.recv_timeout(Duration::from_millis(800));
         }
     } else {
-        let _ = tx.send(Msg { x, y, click, ack: None });
+        let _ = tx.send(Msg::Glide { x, y, click, ack: None });
     }
+}
+
+/// Keep the screen-edge glow and banner alive while fastuse is actively executing any action.
+pub fn set_active(active: bool) {
+    if let Some(tx) = TX.get() {
+        let _ = tx.send(Msg::Active(active));
+    }
+}
+
+fn frame_idle() -> Duration {
+    std::env::var("FASTUSE_FRAME_IDLE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_FRAME_IDLE)
 }
 
 /// True when the overlay thread was started (it is skipped when FASTUSE_CURSOR=0).
@@ -363,6 +381,7 @@ fn run<S: Surface>(rx: mpsc::Receiver<Msg>, mut sf: S) {
     let mut frame_since = Instant::now();
     let mut last = Instant::now();
     let mut last_frame = Instant::now();
+    let mut active = false;
 
     macro_rules! tick_frame {
         () => {
@@ -377,83 +396,118 @@ fn run<S: Surface>(rx: mpsc::Receiver<Msg>, mut sf: S) {
     loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(first) => {
-                // coalesce a burst (a batch of steps): glide to the last target, ripple if any clicked
-                let (mut tx_, mut ty_, mut click) = (first.x, first.y, first.click);
-                let mut acks: Vec<mpsc::Sender<()>> = first.ack.into_iter().collect();
-                while let Ok(n) = rx.try_recv() {
-                    tx_ = n.x;
-                    ty_ = n.y;
-                    click |= n.click;
-                    acks.extend(n.ack);
-                }
-                let (tx_, ty_) = (tx_ as f32, ty_ as f32);
-                if glow && !frame_on {
-                    frame_since = Instant::now();
-                    frame_on = true;
-                    sf.frame_alpha(0.0, 0.0);
-                    sf.frame_visible(true);
-                }
-                if !cursor_on {
-                    pos = (tx_ - 90.0 * sc, ty_ - 60.0 * sc); // glide in from up-left
-                    sf.cursor_frame(0, 255);
-                    sf.cursor_place(pos.0, pos.1);
-                    sf.cursor_visible(true);
-                    cursor_on = true;
-                } else {
-                    sf.cursor_frame(0, 255); // undo a fade in progress
-                }
-                // curved glide: quadratic bezier bowed sideways, eased
-                let (dx, dy) = (tx_ - pos.0, ty_ - pos.1);
-                let dist = (dx * dx + dy * dy).sqrt();
-                let ms = (160.0 + dist / sc * 0.45).clamp(180.0, 420.0);
-                let steps = (ms / 14.0) as i32;
-                let (cx, cy) = ((pos.0 + tx_) / 2.0 - dy * 0.18, (pos.1 + ty_) / 2.0 + dx * 0.18);
-                for i in 1..=steps {
-                    let t = i as f32 / steps as f32;
-                    let e = t * t * t * (t * (t * 6.0 - 15.0) + 10.0); // smootherstep: soft start and stop
-                    let u = 1.0 - e;
-                    sf.cursor_place(u * u * pos.0 + 2.0 * u * e * cx + e * e * tx_, u * u * pos.1 + 2.0 * u * e * cy + e * e * ty_);
-                    if last_frame.elapsed() >= Duration::from_millis(50) {
-                        tick_frame!();
+                let mut current = Some(first);
+                while let Some(msg) = current.take() {
+                    match msg {
+                        Msg::Active(on) => {
+                            active = on;
+                            last = Instant::now();
+                            if on && glow && !frame_on {
+                                frame_since = Instant::now();
+                                frame_on = true;
+                                sf.frame_alpha(0.0, 0.0);
+                                sf.frame_visible(true);
+                            }
+                            tick_frame!();
+                        }
+                        Msg::Glide { x, y, click, ack } => {
+                            let (mut tx_, mut ty_, mut click_) = (x, y, click);
+                            let mut acks: Vec<mpsc::Sender<()>> = ack.into_iter().collect();
+                            while let Ok(next) = rx.try_recv() {
+                                match next {
+                                    Msg::Glide { x: nx, y: ny, click: nc, ack: na } => {
+                                        tx_ = nx;
+                                        ty_ = ny;
+                                        click_ |= nc;
+                                        acks.extend(na);
+                                    }
+                                    Msg::Active(on) => {
+                                        current = Some(Msg::Active(on));
+                                        break;
+                                    }
+                                }
+                            }
+                            let (tx_, ty_) = (tx_ as f32, ty_ as f32);
+                            if glow && !frame_on {
+                                frame_since = Instant::now();
+                                frame_on = true;
+                                sf.frame_alpha(0.0, 0.0);
+                                sf.frame_visible(true);
+                            }
+                            if !cursor_on {
+                                pos = (tx_ - 90.0 * sc, ty_ - 60.0 * sc); // glide in from up-left
+                                sf.cursor_frame(0, 255);
+                                sf.cursor_place(pos.0, pos.1);
+                                sf.cursor_visible(true);
+                                cursor_on = true;
+                            } else {
+                                sf.cursor_frame(0, 255); // undo a fade in progress
+                            }
+                            // curved glide: quadratic bezier bowed sideways, eased
+                            let (dx, dy) = (tx_ - pos.0, ty_ - pos.1);
+                            let dist = (dx * dx + dy * dy).sqrt();
+                            let ms = (160.0 + dist / sc * 0.45).clamp(180.0, 420.0);
+                            let steps = (ms / 14.0) as i32;
+                            let (cx, cy) = ((pos.0 + tx_) / 2.0 - dy * 0.18, (pos.1 + ty_) / 2.0 + dx * 0.18);
+                            for i in 1..=steps {
+                                let t = i as f32 / steps as f32;
+                                let e = t * t * t * (t * (t * 6.0 - 15.0) + 10.0); // smootherstep: soft start and stop
+                                let u = 1.0 - e;
+                                sf.cursor_place(u * u * pos.0 + 2.0 * u * e * cx + e * e * tx_, u * u * pos.1 + 2.0 * u * e * cy + e * e * ty_);
+                                if last_frame.elapsed() >= Duration::from_millis(50) {
+                                    tick_frame!();
+                                }
+                                std::thread::sleep(Duration::from_millis(14));
+                            }
+                            sf.cursor_place(tx_, ty_);
+                            pos = (tx_, ty_);
+                            for a in acks {
+                                let _ = a.send(());
+                            }
+                            if click_ {
+                                for f in 1..=RIPPLE_FRAMES {
+                                    sf.cursor_frame(f, 255);
+                                    tick_frame!();
+                                    std::thread::sleep(Duration::from_millis(28));
+                                }
+                                sf.cursor_frame(0, 255);
+                            }
+                            tick_frame!();
+                            last = Instant::now();
+                        }
                     }
-                    std::thread::sleep(Duration::from_millis(14));
-                }
-                sf.cursor_place(tx_, ty_);
-                pos = (tx_, ty_);
-                for a in acks {
-                    let _ = a.send(());
-                }
-                if click {
-                    for f in 1..=RIPPLE_FRAMES {
-                        sf.cursor_frame(f, 255);
-                        tick_frame!();
-                        std::thread::sleep(Duration::from_millis(28));
+                    if current.is_none() {
+                        if let Ok(n) = rx.try_recv() {
+                            current = Some(n);
+                        }
                     }
-                    sf.cursor_frame(0, 255);
                 }
-                tick_frame!();
-                last = Instant::now();
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if cursor_on && last.elapsed() > CURSOR_IDLE {
-                    for a in (0..=8).rev() {
-                        sf.cursor_frame(0, (a * 31) as u8);
-                        std::thread::sleep(Duration::from_millis(30));
-                    }
-                    sf.cursor_visible(false);
-                    cursor_on = false;
-                }
-                if frame_on && last.elapsed() > FRAME_IDLE {
-                    let (g, b) = frame_levels(frame_since.elapsed(), t0.elapsed().as_secs_f32());
-                    for a in (0..=10).rev() {
-                        let k = a as f32 / 10.0;
-                        sf.frame_alpha(g * k, b * k);
-                        std::thread::sleep(Duration::from_millis(30));
-                    }
-                    sf.frame_visible(false);
-                    frame_on = false;
-                } else {
+                if active {
+                    last = Instant::now();
                     tick_frame!();
+                } else {
+                    if cursor_on && last.elapsed() > CURSOR_IDLE {
+                        for a in (0..=8).rev() {
+                            sf.cursor_frame(0, (a * 31) as u8);
+                            std::thread::sleep(Duration::from_millis(30));
+                        }
+                        sf.cursor_visible(false);
+                        cursor_on = false;
+                    }
+                    if frame_on && last.elapsed() > frame_idle() {
+                        let (g, b) = frame_levels(frame_since.elapsed(), t0.elapsed().as_secs_f32());
+                        for a in (0..=10).rev() {
+                            let k = a as f32 / 10.0;
+                            sf.frame_alpha(g * k, b * k);
+                            std::thread::sleep(Duration::from_millis(30));
+                        }
+                        sf.frame_visible(false);
+                        frame_on = false;
+                    } else {
+                        tick_frame!();
+                    }
                 }
             }
             Err(_) => return,
@@ -518,5 +572,11 @@ mod tests {
     #[test]
     fn rgba_bytes_order() {
         assert_eq!(to_rgba_bytes(&[0x80_10_20_30]), vec![0x10, 0x20, 0x30, 0x80]);
+    }
+
+    #[test]
+    fn frame_idle_default_and_env() {
+        assert_eq!(DEFAULT_FRAME_IDLE, Duration::from_secs(30));
+        assert_eq!(frame_idle(), Duration::from_secs(30));
     }
 }

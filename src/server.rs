@@ -206,16 +206,23 @@ impl Server {
                     None => None,
                 };
                 let w = self.resolve(a).ok();
+                if el.is_none() {
+                    if let Some(w) = w.as_ref() {
+                        self.show_agent(w);
+                    }
+                }
                 self.p.type_text(w.as_ref(), el, t, fg)
             }
             "press_key" => {
                 let k = arg_s(a, "key").ok_or("press_key needs key")?;
                 let w = self.resolve(a)?;
+                self.show_agent(&w);
                 self.p.press_key(&w, k)
             }
             "hotkey" => {
                 let k = arg_s(a, "keys").ok_or("hotkey needs keys, e.g. \"ctrl+a\"")?;
                 let w = self.resolve(a)?;
+                self.show_agent(&w);
                 self.p.hotkey(&w, k)
             }
             "scroll" => {
@@ -232,9 +239,15 @@ impl Server {
                     None => None,
                 };
                 let w = self.resolve(a)?;
+                if el.is_none() {
+                    self.show_agent(&w);
+                }
                 self.p.scroll(&w, el, dir, amt)
             }
             "wait" => {
+                if let Ok(w) = self.resolve(a) {
+                    self.show_agent(&w);
+                }
                 if let Some(want) = arg_s(a, "text") {
                     let w = self.resolve(a)?;
                     let limit = arg_i(a, "timeout").unwrap_or(5000).clamp(100, 15000) as u64;
@@ -357,6 +370,23 @@ impl Server {
     }
 
     pub fn call(&mut self, name: &str, a: &Value) -> Value {
+        let is_control = matches!(
+            name,
+            "act" | "run_steps" | "browser_act" | "click" | "double_click" | "right_click"
+                | "set_value" | "type_text" | "press_key" | "hotkey" | "scroll" | "wait"
+                | "get_window_state"
+        );
+        if is_control {
+            self.p.ping_overlay(true);
+        }
+        let res = self.dispatch(name, a);
+        if is_control {
+            self.p.ping_overlay(false);
+        }
+        res
+    }
+
+    fn dispatch(&mut self, name: &str, a: &Value) -> Value {
         match name {
             "list_windows" => {
                 let with_exe = a.get("exe").and_then(|v| v.as_bool()).unwrap_or(false);

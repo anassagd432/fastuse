@@ -28,6 +28,10 @@ pub fn go(x: i32, y: i32, click: bool) {
     overlay::go(x, y, click);
 }
 
+pub fn set_active(active: bool) {
+    overlay::set_active(active);
+}
+
 pub fn enabled() -> bool {
     overlay::enabled()
 }

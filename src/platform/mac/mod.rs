@@ -162,6 +162,10 @@ impl Platform for MacPlatform {
         crate::overlay::go(x, y, click);
     }
 
+    fn ping_overlay(&self, active: bool) {
+        crate::overlay::set_active(active);
+    }
+
     fn doctor(&self) -> String {
         let ax_ok = ax::trusted();
         let sr_ok = unsafe { cg::CGPreflightScreenCaptureAccess() };

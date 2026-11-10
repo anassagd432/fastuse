@@ -116,6 +116,8 @@ pub trait Platform {
     fn grab(&mut self, t: CaptureTarget, screen_mode: bool) -> Result<Frame, String>;
     /// Glide the agent cursor to a screen point. No-op where unsupported.
     fn move_cursor(&self, x: i32, y: i32, click: bool);
+    /// Keep the agent overlay (glow and banner) visible while an action or session is active.
+    fn ping_overlay(&self, _active: bool) {}
 
     /// Human-readable health report for `fastuse doctor` (permissions, accessibility switches...).
     fn doctor(&self) -> String {

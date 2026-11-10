@@ -154,4 +154,8 @@ impl Platform for WinPlatform {
     fn move_cursor(&self, x: i32, y: i32, click: bool) {
         cursor::go(x, y, click);
     }
+
+    fn ping_overlay(&self, active: bool) {
+        cursor::set_active(active);
+    }
 }
