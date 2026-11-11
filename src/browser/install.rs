@@ -11,7 +11,31 @@ use super::data_dir;
 pub const HOST_NAME: &str = "com.fastuse.browser";
 /// The unpacked development extension (its ID is fixed by the `key` in extension/manifest.json).
 /// Set FASTUSE_EXTENSION_ID to add another one, e.g. the Chrome Web Store ID later.
-const EXTENSION_IDS: &[&str] = &["andnpcpahlilpjlipaogpekbnljedfcb"];
+pub const EXTENSION_ID: &str = "andnpcpahlilpjlipaogpekbnljedfcb";
+const EXTENSION_IDS: &[&str] = &[EXTENSION_ID];
+
+const EXTENSION_FILES: &[(&str, &str)] = &[
+    ("manifest.json", include_str!("../../extension/manifest.json")),
+    ("background.js", include_str!("../../extension/background.js")),
+    ("actions.js", include_str!("../../extension/actions.js")),
+    ("reader.js", include_str!("../../extension/reader.js")),
+    ("popup.html", include_str!("../../extension/popup.html")),
+    ("popup.js", include_str!("../../extension/popup.js")),
+];
+
+pub fn extension_dir() -> PathBuf {
+    data_dir().join("extension")
+}
+
+pub fn unpack_extension() -> Result<PathBuf, String> {
+    let dir = extension_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    for (name, content) in EXTENSION_FILES {
+        let dest = dir.join(name);
+        std::fs::write(&dest, content).map_err(|e| format!("cannot write {}: {e}", dest.display()))?;
+    }
+    Ok(dir)
+}
 
 fn manifest_path() -> PathBuf {
     data_dir().join(format!("{HOST_NAME}.json"))
@@ -45,6 +69,13 @@ const BROWSER_KEYS: &[(&str, &str)] = &[
     ("Edge", r"Software\Microsoft\Edge\NativeMessagingHosts"),
 ];
 
+#[cfg(windows)]
+const BROWSER_EXT_KEYS: &[(&str, &str)] = &[
+    ("Chrome", r"Software\Google\Chrome\Extensions"),
+    ("Brave", r"Software\BraveSoftware\Brave-Browser\Extensions"),
+    ("Edge", r"Software\Microsoft\Edge\Extensions"),
+];
+
 #[cfg(target_os = "macos")]
 const BROWSER_DIRS: &[(&str, &str)] = &[
     ("Chrome", "Library/Application Support/Google/Chrome/NativeMessagingHosts"),
@@ -53,12 +84,28 @@ const BROWSER_DIRS: &[(&str, &str)] = &[
     ("Chromium", "Library/Application Support/Chromium/NativeMessagingHosts"),
 ];
 
+#[cfg(target_os = "macos")]
+const BROWSER_EXT_DIRS: &[(&str, &str)] = &[
+    ("Chrome", "Library/Application Support/Google/Chrome/External Extensions"),
+    ("Brave", "Library/Application Support/BraveSoftware/Brave-Browser/External Extensions"),
+    ("Edge", "Library/Application Support/Microsoft Edge/External Extensions"),
+    ("Chromium", "Library/Application Support/Chromium/External Extensions"),
+];
+
 #[cfg(all(unix, not(target_os = "macos")))]
 const BROWSER_DIRS: &[(&str, &str)] = &[
     ("Chrome", ".config/google-chrome/NativeMessagingHosts"),
     ("Brave", ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
     ("Edge", ".config/microsoft-edge/NativeMessagingHosts"),
     ("Chromium", ".config/chromium/NativeMessagingHosts"),
+];
+
+#[cfg(all(unix, not(target_os = "macos")))]
+const BROWSER_EXT_DIRS: &[(&str, &str)] = &[
+    ("Chrome", ".config/google-chrome/External Extensions"),
+    ("Brave", ".config/BraveSoftware/Brave-Browser/External Extensions"),
+    ("Edge", ".config/microsoft-edge/External Extensions"),
+    ("Chromium", ".config/chromium/External Extensions"),
 ];
 
 pub fn install() -> Result<String, String> {
@@ -93,7 +140,8 @@ pub fn install() -> Result<String, String> {
     let mp = manifest_path();
     std::fs::write(&mp, serde_json::to_string_pretty(&manifest).unwrap()).map_err(|e| e.to_string())?;
 
-    let mut report = format!("host program: {}\nmanifest:     {}\n", dest.display(), mp.display());
+    let ext_dir = unpack_extension()?;
+    let mut report = format!("host program: {}\nmanifest:     {}\nextension:    {}\n", dest.display(), mp.display(), ext_dir.display());
     #[cfg(windows)]
     for (name, key) in BROWSER_KEYS {
         let full = format!(r"HKCU\{key}\{HOST_NAME}");
@@ -102,7 +150,20 @@ pub fn install() -> Result<String, String> {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
-        report += &format!("{name}: {}\n", if ok { "registered" } else { "FAILED to register" });
+        report += &format!("{name} host: {}\n", if ok { "registered" } else { "FAILED to register" });
+    }
+    #[cfg(windows)]
+    for (name, key) in BROWSER_EXT_KEYS {
+        let full = format!(r"HKCU\{key}\{EXTENSION_ID}");
+        let ok = std::process::Command::new("reg")
+            .args(["add", &full, "/v", "path", "/t", "REG_SZ", "/d", &ext_dir.display().to_string(), "/f"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        let _ = std::process::Command::new("reg")
+            .args(["add", &full, "/v", "version", "/t", "REG_SZ", "/d", "0.0.1", "/f"])
+            .output();
+        report += &format!("{name} ext:  {}\n", if ok { "registered" } else { "skipped" });
     }
     #[cfg(unix)]
     {
@@ -116,11 +177,92 @@ pub fn install() -> Result<String, String> {
                 continue;
             }
             let ok = std::fs::create_dir_all(&dir).is_ok() && std::fs::copy(&mp, dir.join(format!("{HOST_NAME}.json"))).is_ok();
-            report += &format!("{name}: {}\n", if ok { "registered" } else { "FAILED to register" });
+            report += &format!("{name} host: {}\n", if ok { "registered" } else { "FAILED to register" });
+        }
+        let ext_json = json!({
+            "external_path": ext_dir.display().to_string(),
+        });
+        for (name, rel) in BROWSER_EXT_DIRS {
+            let dir = PathBuf::from(&home).join(rel);
+            let browser_root = dir.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            if browser_root.exists() {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::fs::write(dir.join(format!("{EXTENSION_ID}.json")), serde_json::to_string_pretty(&ext_json).unwrap());
+                report += &format!("{name} ext:  registered\n");
+            }
         }
     }
-    report += "\nNext: in your browser open chrome://extensions, turn on Developer mode, choose Load unpacked and pick the extension folder of this repository. Then click the fastuse icon on a page to allow that site.";
+    report += &format!("\nExtension installed to {}.\nTo launch your browser with the extension immediately loaded, run:\n  fastuse browser-open", ext_dir.display());
     Ok(report)
+}
+
+pub fn open_browser(url: Option<&str>) -> Result<String, String> {
+    let _ = install();
+    let ext_dir = extension_dir();
+    let arg_ext = format!("--load-extension={}", ext_dir.display());
+
+    #[cfg(windows)]
+    {
+        let local_app = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let candidates = [
+            ("Brave", r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe".to_string()),
+            ("Brave (Local)", format!(r"{local_app}\BraveSoftware\Brave-Browser\Application\brave.exe")),
+            ("Chrome", r"C:\Program Files\Google\Chrome\Application\chrome.exe".to_string()),
+            ("Chrome (x86)", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe".to_string()),
+            ("Chrome (Local)", format!(r"{local_app}\Google\Chrome\Application\chrome.exe")),
+            ("Edge", r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe".to_string()),
+            ("Edge (64)", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe".to_string()),
+        ];
+        for (name, path) in candidates {
+            let p = std::path::Path::new(&path);
+            if p.exists() {
+                let mut cmd = std::process::Command::new(p);
+                cmd.arg(&arg_ext);
+                if let Some(u) = url {
+                    cmd.arg(u);
+                }
+                cmd.spawn().map_err(|e| format!("failed to launch {name}: {e}"))?;
+                return Ok(format!("Launched {name} with fastuse extension from {}", ext_dir.display()));
+            }
+        }
+        Err("No Chromium browser (Brave, Chrome, Edge) found in standard locations".into())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let apps = [
+            ("Brave", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+            ("Chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            ("Edge", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        ];
+        for (name, path) in apps {
+            if std::path::Path::new(path).exists() {
+                let mut cmd = std::process::Command::new(path);
+                cmd.arg(&arg_ext);
+                if let Some(u) = url {
+                    cmd.arg(u);
+                }
+                cmd.spawn().map_err(|e| format!("failed to launch {name}: {e}"))?;
+                return Ok(format!("Launched {name} with fastuse extension from {}", ext_dir.display()));
+            }
+        }
+        Err("No Chromium browser (Brave, Chrome, Edge) found in /Applications".into())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for bin in ["brave-browser", "google-chrome", "chromium", "microsoft-edge"] {
+            let mut cmd = std::process::Command::new(bin);
+            cmd.arg(&arg_ext);
+            if let Some(u) = url {
+                cmd.arg(u);
+            }
+            if cmd.spawn().is_ok() {
+                return Ok(format!("Launched {bin} with fastuse extension from {}", ext_dir.display()));
+            }
+        }
+        Err("No Chromium browser command found on PATH".into())
+    }
 }
 
 pub fn uninstall() -> Result<String, String> {

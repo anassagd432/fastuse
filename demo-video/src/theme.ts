@@ -1,0 +1,15 @@
+export const THEME = {
+  bg: "#07090E",
+  bgCard: "#0E131F",
+  bgCardBorder: "#1E293B",
+  blue: "#2F6BFF",
+  blueLight: "#60A5FA",
+  blueGlow: "rgba(47, 107, 255, 0.4)",
+  cyan: "#38BDF8",
+  emerald: "#10B981",
+  red: "#EF4444",
+  text: "#F8FAFC",
+  textMuted: "#94A3B8",
+  fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  monoFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+};

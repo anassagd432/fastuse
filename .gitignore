@@ -8,5 +8,7 @@ bench/crop_*.png
 node_modules/
 site/node_modules/
 site/dist/
+demo-video/node_modules/
+demo-video/out/
 *.old
 

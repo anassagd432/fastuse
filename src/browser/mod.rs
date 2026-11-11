@@ -21,9 +21,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-pub use install::{install, uninstall};
+pub use install::{install, open_browser, uninstall};
 
-pub const NO_BROWSER: &str = "No browser is connected. Install the fastuse browser extension (docs/BROWSER.md), run `fastuse browser-install`, then reload the extension in chrome://extensions. `fastuse doctor` shows what is missing.";
+pub const NO_BROWSER: &str = "No browser is connected. Run `fastuse browser-open` or ensure the fastuse extension is enabled in Brave/Chrome/Edge (`fastuse doctor` shows status).";
 
 pub fn data_dir() -> PathBuf {
     #[cfg(windows)]

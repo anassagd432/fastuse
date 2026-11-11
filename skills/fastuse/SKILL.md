@@ -50,6 +50,11 @@ Run a complete sequence in **one turn**:
 }
 ```
 
+### Auto-Connecting the Browser
+If `browser_act` or `browser_state` returns `NO_BROWSER`:
+Run `fastuse browser-open` in the terminal (or `fastuse browser-open "https://..."`).
+Fastuse automatically unpacks its embedded extension to `%LOCALAPPDATA%\fastuse\extension` (Windows) or `~/.fastuse/extension` (macOS), registers the native messaging host and external extension keys, and launches your browser with the extension loaded without requiring manual steps.
+
 Supported step tools in `browser_act`:
 - `navigate` (`url`): loads URL in active or new tab.
 - `click`, `double_click`, `right_click`, `hover`: by label (`"Sign in"`), role (`"Button:Submit"`), or index (`"[3]"`).

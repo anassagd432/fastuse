@@ -25,6 +25,7 @@ fn main() {
     let setup = match argv.get(1).map(|s| s.as_str()) {
         Some("browser-install") => Some(browser::install()),
         Some("browser-uninstall") => Some(browser::uninstall()),
+        Some("browser-open") => Some(browser::open_browser(argv.get(2).map(|s| s.as_str()))),
         _ => None,
     };
     if let Some(r) = setup {
