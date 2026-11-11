@@ -155,8 +155,8 @@ impl Uia {
         if offscreen && n_kids == 0 && depth > 0 {
             return;
         }
-        // Collapse unnamed structural wrappers (Pane, Group, generic Element) so deep DOM/WPF trees stay compact
-        let is_wrapper = matches!(ct, 50026 | 50033 | 0) || type_name(ct) == "Element";
+        // Collapse unnamed structural wrappers (Pane, Group, Custom, generic Element) so deep DOM/WPF trees stay compact
+        let is_wrapper = matches!(ct, 50025 | 50026 | 50031 | 50033 | 0) || type_name(ct) == "Element" || type_name(ct) == "Custom";
         if depth > 0 && !is_int && is_wrapper && name.is_empty() && value.is_empty() && aid.is_empty() {
             if let Some(kids) = kids {
                 for i in 0..n_kids {

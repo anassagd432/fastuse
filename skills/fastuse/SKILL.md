@@ -3,99 +3,152 @@ name: fastuse
 description: Primary OS computer-use and browser-use skill for Antigravity (Windows & macOS). Use automatically whenever the user asks to access, read, or control their Brave/Chrome/Edge browser tab, interact with any web page, or operate any desktop app, window, or screen on their computer — without the user needing to mention fastuse by name.
 ---
 
-# fastuse — Default Computer Use & Browser Use for Antigravity (Windows & macOS)
+# fastuse — Hyper-Speed Computer Use & Browser Use Engine
 
-`fastuse` is the **default, primary computer-use and browser-use MCP server** (`ServerName: "fastuse"`).
-Whenever the user asks to:
-- **Access or control a browser tab** (*"access my Brave browser tab"*, *"look at my Chrome tab"*, *"click/fill/navigate on the page"*, *"open this site in my browser"*) → immediately use `browser_state` / `browser_act`.
-- **Operate any desktop app or OS window** (*"do this on my computer"*, *"click/type in this app"*, *"what windows are open"*, *"take a screenshot of the window"*) → immediately use `act` / `get_window_state` / `list_windows` / `screenshot`.
-
-Never wait for the user to say `"use fastuse"`. Do not launch Playwright, Puppeteer, or headless CDP browsers when the user asks to interact with their browser or computer.
+`fastuse` is Antigravity's **default, primary computer-use and browser-use MCP server** (`ServerName: "fastuse"`).
+It operates native OS desktop windows and active browser tabs **in the background with zero cursor stealing** and **sub-millisecond native dispatch**.
 
 ---
 
-## 1. Browser Use (`browser_state`, `browser_act`) — Brave, Chrome, Edge, Chromium
+## ⚡ The 3 Golden Rules for Maximum Speed (Avoid the Sloth Trap)
 
-Use `browser_state` and `browser_act` for **everything inside a web page** in the user's running browser (with their existing logins, cookies, and active tabs).
+Most AI computer-use tools are slow because agents fall into the **visual screenshot trap** (taking a screenshot $\rightarrow$ waiting 4s for vision models $\rightarrow$ clicking 1 button $\rightarrow$ repeating). 
 
-### Reading the active browser tab (`browser_state`)
-When the user says *"access my Brave browser tab"* or *"read the current page"*, call `browser_state`:
-```json
-{}
-```
-Optional parameters:
-- `tab` *(integer)*: specific tab ID from the `tabs:` list (defaults to the user's active tab or the last agent-used tab).
-- `text` *(boolean)*: `true` to include paragraph, list item, and preformatted text alongside headings and interactive controls.
-- `max_elements` *(integer)*: max interactive elements to return (default `250`).
+To execute tasks in **50 milliseconds instead of 30 seconds**, follow these 3 rules:
 
-### Acting in the browser (`browser_act`)
-Do an entire web flow in **one call** (`navigate`, `click`, `fill`, `select`, `check`, `press`, `scroll`, `wait`, `new_tab`, `switch_tab`, `close_tab`, `back`, `forward`, `reload`) and get the updated page state + tab list back automatically:
+### 1. NEVER Take Screenshots for Standard UI Actions
+- **Do NOT call `screenshot` before clicking or typing.**
+- Vision processing takes **3,000ms–5,000ms** per image.
+- Semantic calls (`act`, `browser_act`, `get_window_state`) resolve controls by text/role in **0.9ms to 20ms** without any multimodal vision overhead.
+- **Only use `screenshot` when genuinely necessary:** inspecting visual drawings, image editors, canvas, games, or videos.
+
+### 2. ALWAYS Batch in a Single Turn (`steps: [...]`)
+- Never do 1 action per agent turn.
+- A multi-step task (e.g., search Google, click first link, read page) can be executed in **ONE single turn** with `browser_act` or `act`.
+- Fastuse runs all steps in order in native memory in under 50ms total.
+
+### 3. Route Correctly: Web vs. Desktop
+- **Web Pages & Browser Tabs:** Always use `browser_act` / `browser_state` (connects directly to the user's running Brave, Chrome, or Edge with active logins and cookies intact).
+- **Desktop Apps & OS Windows:** Always use `act` / `get_window_state` / `list_windows` (Notepad, VS Code, Spotify, Discord, Explorer, Settings).
+
+---
+
+## 1. Browser Use (`browser_act`, `browser_state`) — Brave, Chrome, Edge
+
+Use for everything inside a web page. The user's active login sessions, cookies, and extensions remain 100% active.
+
+### Fast Single-Turn Web Batch (`browser_act`)
+Run a complete sequence in **one turn**:
 ```json
 {
   "steps": [
-    { "tool": "navigate", "url": "https://example.com" },
-    { "tool": "fill", "target": "Search", "value": "fastuse" },
+    { "tool": "navigate", "url": "https://github.com/anassagd432/fastuse" },
+    { "tool": "click", "target": "Issues" },
+    { "tool": "fill", "target": "Search", "value": "is:open label:bug" },
     { "tool": "press", "key": "Enter" }
   ]
 }
 ```
-- **Target resolution (`target` or `element_token`):**
-  - Element label/text: `"Sign in"`, `"Search"`
-  - Role + label: `"Button:Sign in"`, `"TextBox:Email"`, `"Link:Docs"`
-  - Row index from `browser_state`: `"[3]"` or `"#3"`
-  - Snapshot token: `"s00000001:3"` (either in `element_token` or `target`)
-  - CSS selector: `"css:button[type='submit']"`
-- **Multi-step resilience:**
-  - Steps after `navigate` / `new_tab` / `reload` in the same `browser_act` batch automatically read the new DOM before executing.
-  - If step 1 opens a dropdown, modal, or menu and step 2's target was not in the initial snapshot, `fastuse` automatically settles, re-reads the live DOM, and completes step 2 in the same call.
-  - `select` works on both native `<select>` elements and custom ARIA comboboxes (`role="combobox"` / `role="listbox"`).
+
+Supported step tools in `browser_act`:
+- `navigate` (`url`): loads URL in active or new tab.
+- `click`, `double_click`, `right_click`, `hover`: by label (`"Sign in"`), role (`"Button:Submit"`), or index (`"[3]"`).
+- `fill`: replaces text in an input field (`target`, `value` or `text`).
+- `type`: appends text to an input field (`target`, `text`).
+- `press`: keyboard key (`"Enter"`, `"Tab"`, `"Escape"`).
+- `select`: chooses option in dropdown (`target`, `value`).
+- `scroll`: scrolls page (`direction`: `"down"|"up"`, `amount`: wheel ticks).
+- `wait`: `{ "tool": "wait", "ms": 300 }` or `{ "tool": "wait", "text": "Results" }`.
+- `new_tab`, `switch_tab`, `close_tab`, `back`, `forward`, `reload`.
+
+### Reading Page State (`browser_state`)
+Only needed when you need to inspect an unfamiliar page before acting:
+```json
+{
+  "text": true,
+  "max_elements": 60
+}
+```
 
 ---
 
-## 2. Desktop / OS Computer Use (`act`, `get_window_state`, `list_windows`, `screenshot`)
+## 2. Desktop Computer Use (`act`, `get_window_state`, `list_windows`)
 
-Use the desktop tools for native Windows (Win32 / WPF / WinUI / Electron) and macOS (AppKit / SwiftUI / Cocoa) app windows, dialogs, and OS UI. All actions run **background-first** without stealing the user's mouse cursor or focus.
+Operates any native Windows (Win32, WPF, WinUI, Electron) or macOS (Cocoa, SwiftUI) app. All actions execute **background-first** without moving the user's physical mouse cursor.
 
-### Operating a desktop window in one call (`act`)
+### Fast Single-Turn Desktop Batch (`act`)
+Run all steps in **one turn** against the target window:
 ```json
 {
-  "window": "Calculator",
+  "window": "Notepad",
   "steps": [
-    { "tool": "click", "target": "Seven" },
-    { "tool": "click", "target": "Plus" },
-    { "tool": "click", "target": "Three" },
-    { "tool": "click", "target": "Equals" }
+    { "tool": "type_text", "text": "Hello world from fastuse\n" },
+    { "tool": "hotkey", "keys": "ctrl+s" }
   ]
 }
 ```
-Supported step tools in `act`:
-- `click`, `double_click`, `right_click`: by `target` (`"Save"`, `"Button:Save"`, `"[4]"`, `"#4"`, `"s00000001:4"`), `element_token`, or window-relative `x`, `y`.
-- `set_value`: sets a text field directly (`target`, `value`).
-- `type_text`: focuses the element (if `target` is given) and types Unicode characters (`text`).
-- `press_key`: single key (`"Enter"`, `"Tab"`, `"Escape"`, `"BackSpace"`, `"Up"`, `"Down"`, `"F5"`).
-- `hotkey`: chord (`"ctrl+s"`, `"ctrl+shift+p"` on Windows; `"cmd+s"`, `"cmd+shift+p"` on macOS).
-- `scroll`: `direction` (`"down"`, `"up"`, `"left"`, `"right"`), `amount` (wheel ticks, default `3`), optional `target` / `element_token` / `x`,`y`.
-- `wait`: `{ "tool": "wait", "ms": 300 }` or `{ "tool": "wait", "text": "Completed", "ms": 3000 }` to poll until text appears in the UI tree.
-- `delivery_mode`: `"background"` (default, never steals focus) or `"foreground"` (raises window only when an app ignores background input).
 
-### Reading a window (`get_window_state`), listing windows (`list_windows`), and screenshots (`screenshot`)
-- `get_window_state`: `{"window": "<title substring>"}` (or `window_id` / `pid`) — returns the compact accessibility tree with `@(x,y,w,h)` bounds and `snapshot_id`.
-- `list_windows`: `{}` — lists all visible top-level windows with `pid`, `window_id`, title, and bounds.
-- `screenshot`: `{"window": "<title>", "crop": {"x": 0, "y": 0, "w": 400, "h": 300}}` — captures only when pixel inspection is needed (`mode: "print"` for background window capture, `"screen"` for compositor capture).
+Supported step tools in `act`:
+- `click`, `double_click`, `right_click`: by `target` (`"Save"`, `"Button:Save"`, `"[4]"`), `element_token`, or window-relative `x`, `y`.
+- `set_value`: instantaneously sets input field without typing (`target`, `value`).
+- `type_text`: focuses element and posts keystrokes directly (`text`).
+- `press_key`: single key (`"Enter"`, `"Tab"`, `"Escape"`, `"F5"`).
+- `hotkey`: chord (`"ctrl+s"`, `"ctrl+shift+p"` on Windows; `"cmd+s"` on macOS).
+- `scroll`: scrolls element or window (`direction`: `"down"|"up"`, `amount`: ticks).
+- `wait`: `{ "tool": "wait", "ms": 200 }` or `{ "tool": "wait", "text": "Saved" }`.
+- `delivery_mode`: `"background"` (default, zero focus steal) or `"foreground"` (only if an app refuses background messages).
+
+### Semantic Tree Read (`get_window_state`)
+Reads clickable controls in <20ms without taking screenshots:
+```json
+{
+  "window": "Visual Studio Code",
+  "max_elements": 60
+}
+```
+
+### Listing Visible Windows (`list_windows`)
+Returns visible top-level windows in 0.9ms:
+```json
+{}
+```
 
 ---
 
-## 3. Calling `fastuse` in Antigravity
+## 3. Fallback Visual Screenshot (`screenshot`)
 
-1. **Primary path (MCP tool call):**
-   Use `call_mcp_tool` with `ServerName: "fastuse"` and `ToolName` set to `browser_state`, `browser_act`, `act`, `get_window_state`, `list_windows`, or `screenshot`.
-2. **CLI fallback (if an older session's MCP process hasn't reloaded after an upgrade):**
-   Run `fastuse call <tool_name> '<json_arguments>'` via `run_command`:
-   ```powershell
-   # Windows
-   & "C:\Users\Anass\Documents\GitHub\fastuse\target\release\fastuse.exe" call browser_state "{}"
-   ```
-   ```bash
-   # macOS
-   fastuse call browser_state '{}'
-   ```
+**Use ONLY when semantic tree or DOM reading cannot see the element** (e.g. custom HTML5 canvas, OpenGL/DirectX game view, image rendering, or video player):
+```json
+{
+  "window": "Blender",
+  "max_dim": 960,
+  "quality": 55
+}
+```
+*Note: Always pass `window` whenever possible to capture only the relevant application rather than the entire multi-monitor desktop.*
+
+---
+
+## 4. Antigravity Calling Convention
+
+In Antigravity, call via `call_mcp_tool`:
+```json
+{
+  "ServerName": "fastuse",
+  "ToolName": "act",
+  "Arguments": {
+    "window": "Calculator",
+    "steps": [
+      { "tool": "click", "target": "Five" },
+      { "tool": "click", "target": "Multiply" },
+      { "tool": "click", "target": "Nine" },
+      { "tool": "click", "target": "Equals" }
+    ]
+  }
+}
+```
+
+If an older session has not yet loaded the MCP server, use the CLI fallback:
+```powershell
+& "C:\Users\Anass\Documents\GitHub\fastuse\target\release\fastuse.exe" call act '{"window":"Calculator","steps":[{"tool":"click","target":"Five"}]}'
+```

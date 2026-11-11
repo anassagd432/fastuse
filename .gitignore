@@ -3,3 +3,10 @@
 # local screenshots from the look-and-feel scripts (they show your desktop)
 bench/*.jpg
 bench/crop_*.png
+
+# Node / Web
+node_modules/
+site/node_modules/
+site/dist/
+*.old
+

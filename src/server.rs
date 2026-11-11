@@ -39,8 +39,8 @@ fn shot_opts(a: &Value) -> imaging::Opts {
             let g = |i: usize| r.get(i).and_then(|v| v.as_u64()).map(|v| v as usize);
             Some([g(0)?, g(1)?, g(2)?, g(3)?])
         }),
-        max_dim: arg_i(a, "max_dim").unwrap_or(1280) as usize,
-        quality: arg_i(a, "quality").unwrap_or(70) as u8,
+        max_dim: arg_i(a, "max_dim").unwrap_or(960) as usize,
+        quality: arg_i(a, "quality").unwrap_or(55) as u8,
         max_age_ms: arg_i(a, "max_age_ms").unwrap_or(0) as u128,
         screen: arg_s(a, "mode") == Some("screen"),
     }
@@ -96,8 +96,8 @@ impl Server {
     }
 
     fn state_text(&mut self, w: &WindowInfo, a: &Value) -> Result<String, String> {
-        let max_el = arg_i(a, "max_elements").unwrap_or(250) as usize;
-        let max_depth = arg_i(a, "max_depth").unwrap_or(25) as usize;
+        let max_el = arg_i(a, "max_elements").unwrap_or(60) as usize;
+        let max_depth = arg_i(a, "max_depth").unwrap_or(12) as usize;
         let (r, sid) = self.read(w, max_el, max_depth)?;
         Ok(format!(
             "window_id={} pid={} elements={} snapshot_id={}{}\ntiming_ms: uia_build={:.1} walk={:.1}\nelement_token for row [N] = {}:N\n\n{}",
@@ -307,10 +307,16 @@ impl Server {
         let steps_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let mut out = format!("run_steps: {} step(s), {steps_ms:.1} ms{}\n{log}", steps.len(), if failed { " (stopped at failure)" } else { "" });
         if !matches!(a.get("observe"), Some(Value::Bool(false))) {
-            let oa = match a.get("observe") {
+            let mut oa = match a.get("observe") {
                 Some(o) if o.is_object() => o.clone(),
                 _ => json!({}),
             };
+            if oa.get("max_elements").is_none() {
+                oa["max_elements"] = json!(35);
+            }
+            if oa.get("max_depth").is_none() {
+                oa["max_depth"] = json!(8);
+            }
             out += "\n";
             out += &self.state_text(&tw, &oa)?;
         }

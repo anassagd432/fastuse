@@ -43,11 +43,14 @@ fn window(hwnd: HWND, screen: bool) -> Result<Frame, String> {
         let mdc = CreateCompatibleDC(Some(sdc));
         let (bmp, bits) = dib(sdc, w, h)?;
         let old = SelectObject(mdc, bmp.into());
-        let ok = if screen {
+        let mut ok = if screen {
             BitBlt(mdc, 0, 0, w, h, Some(sdc), r.left, r.top, SRCCOPY).is_ok()
         } else {
             PrintWindow(hwnd, mdc, PRINT_WINDOW_FLAGS(2)).as_bool() // PW_RENDERFULLCONTENT
         };
+        if !ok && !screen {
+            ok = BitBlt(mdc, 0, 0, w, h, Some(sdc), r.left, r.top, SRCCOPY).is_ok();
+        }
         let bgra = std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize).to_vec();
         SelectObject(mdc, old);
         let _ = DeleteObject(bmp.into());

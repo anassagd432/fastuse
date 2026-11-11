@@ -65,18 +65,25 @@ impl Cache {
             (rw, rh)
         };
         let mut buf = vec![0u8; ow * oh * 4];
-        for oy in 0..oh {
-            let sy = ry + oy * rh / oh;
-            let srow = sy * f.w;
-            let drow = oy * ow;
-            if ow == rw {
+        if ow == rw && oh == rh && rx == 0 && ry == 0 && f.w == rw {
+            buf.copy_from_slice(&f.bgra[..ow * oh * 4]);
+        } else if ow == rw {
+            for oy in 0..oh {
+                let sy = ry + oy * rh / oh;
+                let srow = sy * f.w;
+                let drow = oy * ow;
                 let s = (srow + rx) * 4;
                 buf[drow * 4..(drow + ow) * 4].copy_from_slice(&f.bgra[s..s + ow * 4]);
-            } else {
-                for ox in 0..ow {
-                    let sx = rx + ox * rw / ow;
-                    let s = (srow + sx) * 4;
-                    let d = (drow + ox) * 4;
+            }
+        } else {
+            let x_map: Vec<usize> = (0..ow).map(|ox| (rx + ox * rw / ow) * 4).collect();
+            for oy in 0..oh {
+                let sy = ry + oy * rh / oh;
+                let srow = sy * f.w * 4;
+                let drow = oy * ow * 4;
+                for (ox, &sx) in x_map.iter().enumerate() {
+                    let s = srow + sx;
+                    let d = drow + ox * 4;
                     buf[d..d + 4].copy_from_slice(&f.bgra[s..s + 4]);
                 }
             }
