@@ -12,12 +12,49 @@ use std::io::{BufRead, Write};
 
 use serde_json::{json, Value};
 
+fn print_help() {
+    println!(
+        "fastuse {} — fast, background-first Computer Use & Browser Use MCP server\n\n\
+USAGE:\n  fastuse                            Run MCP JSON-RPC server over stdio\n  \
+fastuse --version                  Print version\n  \
+fastuse --help                     Show this help message\n  \
+fastuse doctor                     Check OS automation, overlay, and browser bridge health\n  \
+fastuse browser-install            Unpack extension & register native messaging host\n  \
+fastuse browser-open [flags] [url] Launch Chromium browser with fastuse extension loaded\n      \
+--relaunch                     Restart running browser (preserves tabs & logins)\n      \
+--isolated                     Launch in a separate automation profile\n  \
+fastuse browser-uninstall          Remove native messaging registration\n  \
+fastuse demo                       Run a quick local cursor/overlay demo\n  \
+fastuse call <tool> '<json>'       Invoke a single MCP tool directly from CLI",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+fn parse_browser_open(args: &[String]) -> Result<String, String> {
+    let mut relaunch = false;
+    let mut isolated = false;
+    let mut url: Option<&str> = None;
+    for a in args {
+        match a.as_str() {
+            "--relaunch" => relaunch = true,
+            "--isolated" => isolated = true,
+            s if !s.starts_with('-') && url.is_none() => url = Some(s),
+            other => return Err(format!("unknown option for browser-open: {other}")),
+        }
+    }
+    browser::open_browser(url, relaunch, isolated)
+}
+
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--version") {
+    let argv: Vec<String> = std::env::args().collect();
+    if matches!(argv.get(1).map(|s| s.as_str()), Some("--version" | "-V")) {
         println!("fastuse {}", env!("CARGO_PKG_VERSION"));
         return;
     }
-    let argv: Vec<String> = std::env::args().collect();
+    if matches!(argv.get(1).map(|s| s.as_str()), Some("--help" | "-h" | "help")) {
+        print_help();
+        return;
+    }
     // the browser starts us as its native host; no desktop backend and nothing else on stdout
     if browser::is_host_invocation(&argv) {
         std::process::exit(browser::host_main());
@@ -25,7 +62,7 @@ fn main() {
     let setup = match argv.get(1).map(|s| s.as_str()) {
         Some("browser-install") => Some(browser::install()),
         Some("browser-uninstall") => Some(browser::uninstall()),
-        Some("browser-open") => Some(browser::open_browser(argv.get(2).map(|s| s.as_str()))),
+        Some("browser-open") => Some(parse_browser_open(&argv[2..])),
         _ => None,
     };
     if let Some(r) = setup {

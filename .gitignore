@@ -1,4 +1,5 @@
 /target
+/dist
 
 # local screenshots from the look-and-feel scripts (they show your desktop)
 bench/*.jpg

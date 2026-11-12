@@ -53,7 +53,8 @@ Run a complete sequence in **one turn**:
 ### Auto-Connecting the Browser
 If `browser_act` or `browser_state` returns `NO_BROWSER`:
 Run `fastuse browser-open` in the terminal (or `fastuse browser-open "https://..."`).
-Fastuse automatically unpacks its embedded extension to `%LOCALAPPDATA%\fastuse\extension` (Windows) or `~/.fastuse/extension` (macOS), registers the native messaging host and external extension keys, and launches your browser with the extension loaded without requiring manual steps.
+- If the browser is not running, it launches with the embedded extension loaded and all user logins intact.
+- If the browser is already running without the extension, it opens an isolated fastuse session automatically (or pass `fastuse browser-open --relaunch` to restart the user's main browser with tabs/logins preserved and the extension attached).
 
 Supported step tools in `browser_act`:
 - `navigate` (`url`): loads URL in active or new tab.

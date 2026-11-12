@@ -2,8 +2,9 @@
 #
 #   irm https://github.com/anassagd432/fastuse/releases/latest/download/install.ps1 | iex
 #
-# Downloads the release zip, verifies its SHA256 against the release's SHA256SUMS, installs to
-# %LOCALAPPDATA%\Programs\fastuse, and registers the server + OS/browser skill + auto-routing rule with Antigravity (agy).
+# Downloads the release zip, verifies its SHA256 against SHA256SUMS, installs to
+# %LOCALAPPDATA%\Programs\fastuse, adds it to User PATH, registers the browser native host
+# + extension, and installs Antigravity skill & routing rules.
 
 param(
     [string]$Repo = $(if ($env:FASTUSE_REPO) { $env:FASTUSE_REPO } else { "anassagd432/fastuse" }),
@@ -35,6 +36,20 @@ try {
     New-Item -ItemType Directory -Force $dir | Out-Null
     Copy-Item (Join-Path $stage "*") $dir -Recurse -Force
     $exe = Join-Path $dir "fastuse.exe"
+
+    # Ensure %LOCALAPPDATA%\Programs\fastuse is on User PATH
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $segments = @()
+    if ($userPath) { $segments = $userPath -split ";" | Where-Object { $_ -ne "" } }
+    if ($segments -notcontains $dir) {
+        $newPath = (@($dir) + $segments) -join ";"
+        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+        Write-Host "==> added $dir to User PATH"
+    }
+    if (($env:Path -split ";") -notcontains $dir) {
+        $env:Path = "$dir;$env:Path"
+    }
+
     & $exe --version
     & $exe browser-install | Out-Host
 
@@ -42,8 +57,6 @@ try {
         if (Get-Command agy -ErrorAction SilentlyContinue) {
             Write-Host "==> registering with Antigravity"
             agy mcp add fastuse $exe | Out-Host
-        } else {
-            Write-Host "agy CLI not on PATH; installing skill and rule files directly (`agy mcp add fastuse `"$exe`"` can be run later)."
         }
         foreach ($skillRoot in @(
             (Join-Path $env:USERPROFILE ".gemini\antigravity\global_skills\fastuse"),
@@ -73,8 +86,14 @@ The user never needs to mention `fastuse` by name. Automatically route requests 
         }
         Write-Host "==> fastuse OS/browser skill and default routing rule installed for Antigravity"
     }
+
     Write-Host ""
-    Write-Host "Installed to $dir"
+    Write-Host "Installed fastuse to: $exe"
+    Write-Host ""
+    Write-Host "Next steps:"
+    Write-Host "  1. Open a connected browser:  fastuse browser-open"
+    Write-Host "  2. Verify health:             fastuse doctor"
+    Write-Host "  3. Claude Code MCP add:       claude mcp add fastuse `"$exe`""
 }
 finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

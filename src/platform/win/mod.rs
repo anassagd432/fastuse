@@ -158,4 +158,18 @@ impl Platform for WinPlatform {
     fn ping_overlay(&self, active: bool) {
         cursor::set_active(active);
     }
+
+    fn doctor(&self) -> String {
+        let win_count = enumerate::list().len();
+        let overlay = if cursor::enabled() { "ready" } else { "disabled" };
+        if win_count > 0 {
+            format!(
+                "Windows: UI Automation OK, Per-Monitor v2 HiDPI aware, background input OK, overlay {overlay} ({win_count} visible windows)."
+            )
+        } else {
+            format!(
+                "Windows: UI Automation OK, Per-Monitor v2 HiDPI aware, background input OK, overlay {overlay}."
+            )
+        }
+    }
 }

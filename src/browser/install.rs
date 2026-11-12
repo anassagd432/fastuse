@@ -196,33 +196,28 @@ pub fn install() -> Result<String, String> {
     Ok(report)
 }
 
-pub fn open_browser(url: Option<&str>) -> Result<String, String> {
-    let _ = install();
-    let ext_dir = extension_dir();
-    let arg_ext = format!("--load-extension={}", ext_dir.display());
+struct BrowserBin {
+    name: &'static str,
+    path: String,
+    proc_name: &'static str,
+}
 
+fn find_browser() -> Result<BrowserBin, String> {
     #[cfg(windows)]
     {
         let local_app = std::env::var("LOCALAPPDATA").unwrap_or_default();
         let candidates = [
-            ("Brave", r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe".to_string()),
-            ("Brave (Local)", format!(r"{local_app}\BraveSoftware\Brave-Browser\Application\brave.exe")),
-            ("Chrome", r"C:\Program Files\Google\Chrome\Application\chrome.exe".to_string()),
-            ("Chrome (x86)", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe".to_string()),
-            ("Chrome (Local)", format!(r"{local_app}\Google\Chrome\Application\chrome.exe")),
-            ("Edge", r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe".to_string()),
-            ("Edge (64)", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe".to_string()),
+            ("Brave", r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe".to_string(), "brave.exe"),
+            ("Brave", format!(r"{local_app}\BraveSoftware\Brave-Browser\Application\brave.exe"), "brave.exe"),
+            ("Chrome", r"C:\Program Files\Google\Chrome\Application\chrome.exe".to_string(), "chrome.exe"),
+            ("Chrome", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe".to_string(), "chrome.exe"),
+            ("Chrome", format!(r"{local_app}\Google\Chrome\Application\chrome.exe"), "chrome.exe"),
+            ("Edge", r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe".to_string(), "msedge.exe"),
+            ("Edge", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe".to_string(), "msedge.exe"),
         ];
-        for (name, path) in candidates {
-            let p = std::path::Path::new(&path);
-            if p.exists() {
-                let mut cmd = std::process::Command::new(p);
-                cmd.arg(&arg_ext);
-                if let Some(u) = url {
-                    cmd.arg(u);
-                }
-                cmd.spawn().map_err(|e| format!("failed to launch {name}: {e}"))?;
-                return Ok(format!("Launched {name} with fastuse extension from {}", ext_dir.display()));
+        for (name, path, proc_name) in candidates {
+            if std::path::Path::new(&path).exists() {
+                return Ok(BrowserBin { name, path, proc_name });
             }
         }
         Err("No Chromium browser (Brave, Chrome, Edge) found in standard locations".into())
@@ -231,19 +226,13 @@ pub fn open_browser(url: Option<&str>) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         let apps = [
-            ("Brave", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
-            ("Chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-            ("Edge", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            ("Brave", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser", "Brave Browser"),
+            ("Chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "Google Chrome"),
+            ("Edge", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "Microsoft Edge"),
         ];
-        for (name, path) in apps {
+        for (name, path, proc_name) in apps {
             if std::path::Path::new(path).exists() {
-                let mut cmd = std::process::Command::new(path);
-                cmd.arg(&arg_ext);
-                if let Some(u) = url {
-                    cmd.arg(u);
-                }
-                cmd.spawn().map_err(|e| format!("failed to launch {name}: {e}"))?;
-                return Ok(format!("Launched {name} with fastuse extension from {}", ext_dir.display()));
+                return Ok(BrowserBin { name, path: path.into(), proc_name });
             }
         }
         Err("No Chromium browser (Brave, Chrome, Edge) found in /Applications".into())
@@ -251,17 +240,140 @@ pub fn open_browser(url: Option<&str>) -> Result<String, String> {
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        for bin in ["brave-browser", "google-chrome", "chromium", "microsoft-edge"] {
-            let mut cmd = std::process::Command::new(bin);
-            cmd.arg(&arg_ext);
-            if let Some(u) = url {
-                cmd.arg(u);
-            }
-            if cmd.spawn().is_ok() {
-                return Ok(format!("Launched {bin} with fastuse extension from {}", ext_dir.display()));
+        for (name, bin) in [
+            ("Brave", "brave-browser"),
+            ("Chrome", "google-chrome"),
+            ("Chromium", "chromium"),
+            ("Edge", "microsoft-edge"),
+        ] {
+            if std::process::Command::new("which")
+                .arg(bin)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                return Ok(BrowserBin { name, path: bin.into(), proc_name: bin });
             }
         }
         Err("No Chromium browser command found on PATH".into())
+    }
+}
+
+fn browser_running(proc_name: &str) -> bool {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("IMAGENAME eq {proc_name}"), "/NH"])
+            .output()
+            .map(|o| {
+                let s = String::from_utf8_lossy(&o.stdout).to_ascii_lowercase();
+                s.contains(&proc_name.to_ascii_lowercase())
+            })
+            .unwrap_or(false)
+    }
+    #[cfg(unix)]
+    {
+        std::process::Command::new("pgrep")
+            .args(["-x", proc_name])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+}
+
+fn stop_browser(proc_name: &str) {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill").args(["/IM", proc_name, "/T"]).output();
+        for _ in 0..10 {
+            if !browser_running(proc_name) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        let _ = std::process::Command::new("taskkill").args(["/F", "/IM", proc_name, "/T"]).output();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &format!("tell application \"{proc_name}\" to quit")])
+            .output();
+        for _ in 0..12 {
+            if !browser_running(proc_name) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        let _ = std::process::Command::new("pkill").args(["-x", proc_name]).output();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("pkill").args(["-x", proc_name]).output();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+}
+
+pub fn open_browser(url: Option<&str>, relaunch: bool, isolated: bool) -> Result<String, String> {
+    let _ = install()?;
+    let ext_dir = extension_dir();
+    let bin = find_browser()?;
+    let already_connected = !super::live_hosts().is_empty();
+
+    if already_connected && !isolated && !relaunch {
+        if let Some(u) = url {
+            let mut cmd = std::process::Command::new(&bin.path);
+            cmd.arg(u);
+            cmd.spawn().map_err(|e| format!("failed to open tab in {}: {e}", bin.name))?;
+            return Ok(format!("{} is already connected; opened {u}.", bin.name));
+        }
+        return Ok(format!("{} is already running and connected to fastuse.", bin.name));
+    }
+
+    let running = browser_running(bin.proc_name);
+    let mut use_isolated = isolated;
+    let mut restore_session = false;
+
+    if relaunch && running {
+        stop_browser(bin.proc_name);
+        restore_session = true;
+    } else if running && !isolated {
+        // Chromium ignores --load-extension when delegating to an existing browser process.
+        use_isolated = true;
+    }
+
+    let mut cmd = std::process::Command::new(&bin.path);
+    cmd.arg(format!("--load-extension={}", ext_dir.display()));
+    if use_isolated {
+        let profile = data_dir().join("browser-profile");
+        let _ = std::fs::create_dir_all(&profile);
+        #[cfg(unix)]
+        {
+            let nm = profile.join("NativeMessagingHosts");
+            if std::fs::create_dir_all(&nm).is_ok() {
+                let _ = std::fs::copy(manifest_path(), nm.join(format!("{HOST_NAME}.json")));
+            }
+        }
+        cmd.arg(format!("--user-data-dir={}", profile.display()));
+        cmd.arg("--no-first-run");
+    } else if restore_session {
+        cmd.arg("--restore-last-session");
+    }
+    if let Some(u) = url {
+        cmd.arg(u);
+    }
+    cmd.spawn().map_err(|e| format!("failed to launch {}: {e}", bin.name))?;
+
+    if use_isolated && running && !isolated {
+        Ok(format!(
+            "Launched {} in an isolated fastuse profile (your existing {} window was already open without the extension).\nTo load the extension in your main logged-in profile instead, run:\n  fastuse browser-open --relaunch",
+            bin.name, bin.name
+        ))
+    } else if use_isolated {
+        Ok(format!("Launched {} (isolated profile) with fastuse extension from {}", bin.name, ext_dir.display()))
+    } else {
+        Ok(format!("Launched {} with fastuse extension from {}", bin.name, ext_dir.display()))
     }
 }
 
