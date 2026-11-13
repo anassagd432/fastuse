@@ -6,14 +6,18 @@
 
 export function readPage(opts) {
   const t0 = performance.now();
-  const max = Math.max(10, Math.min(opts.max || 250, 1000));
+  const max = Math.max(10, Math.min(opts.max || 45, 1000));
+  const scanCap = Math.min(Math.max(max * 10, 600), 2500);
   const withText = !!opts.text;
   const refs = [];
   const meta = [];
   const rows = [];
+  const items = [];
   let truncated = false;
   let interactive = 0;
 
+  const vw = window.innerWidth || 1280;
+  const vh = window.innerHeight || 800;
   const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'META', 'LINK', 'BR', 'WBR']);
   const ACTION_ROLES = new Set([
     'button', 'link', 'checkbox', 'radio', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option',
@@ -31,10 +35,13 @@ export function readPage(opts) {
   const TEXT_TAGS = new Set(['P', 'LI', 'TD', 'TH', 'DT', 'DD', 'FIGCAPTION', 'BLOCKQUOTE', 'PRE', 'SUMMARY', 'LABEL']);
   const txt = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+  const rectInView = (r) => r.bottom >= -20 && r.top <= vh + 20 && r.right >= 0 && r.left <= vw;
 
   function visible(el) {
     try {
-      return el.checkVisibility ? el.checkVisibility({ checkVisibilityCSS: true }) : true;
+      if (!el.checkVisibility || el.checkVisibility({ checkVisibilityCSS: true })) return true;
+      const cs = getComputedStyle(el);
+      return cs.display === 'contents' && cs.visibility !== 'hidden' && cs.opacity !== '0';
     } catch (e) {
       return true;
     }
@@ -129,22 +136,9 @@ export function readPage(opts) {
     return '';
   }
 
-  function row(depth, idx, role, name, value, id, rect, flags) {
-    let s = '  '.repeat(depth) + '- ';
-    if (idx !== null) s += '[' + idx + '] ';
-    s += role;
-    if (name) s += ' "' + name.replace(/"/g, "'") + '"';
-    if (value) s += ' value="' + value.replace(/"/g, "'") + '"';
-    if (flags) s += ' ' + flags;
-    if (id) s += ' id=' + id;
-    if (rect) s += ' @(' + rect.join(',') + ')';
-    rows.push(s);
-  }
-
-  // offsets of nested same-origin frames, so coordinates stay in the top frame's viewport
   function walk(node, depth, ox, oy) {
     for (let el = node.firstElementChild; el; el = el.nextElementSibling) {
-      if (rows.length >= max) {
+      if (items.length >= scanCap) {
         truncated = true;
         return;
       }
@@ -170,33 +164,49 @@ export function readPage(opts) {
         else if (exp === 'false') flagList.push('collapsed');
         const flags = flagList.join(' ');
         const id = el.id || el.getAttribute('data-testid') || el.getAttribute('name') || '';
-        refs.push(el);
-        meta.push({ role: ROLE_LABEL[role] || role, name, id });
-        interactive++;
-        row(depth, refs.length - 1, ROLE_LABEL[role] || role, name, value, id !== name ? id : '',
-          [Math.round(r.left + ox), Math.round(r.top + oy), Math.round(r.width), Math.round(r.height)], flags);
+        items.push({
+          act: true,
+          el,
+          inView: rectInView({ left: r.left + ox, top: r.top + oy, right: r.right + ox, bottom: r.bottom + oy }),
+          depth,
+          role: ROLE_LABEL[role] || role,
+          name,
+          value,
+          id: id !== name ? id : '',
+          rect: [Math.round(r.left + ox), Math.round(r.top + oy), Math.round(r.width), Math.round(r.height)],
+          flags,
+        });
       }
-      // a button or link's own text is already in its name; still look inside widgets like menus
       if (tag === 'A' || tag === 'BUTTON' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'INPUT') return;
     }
 
     let d = depth;
     if (/^H[1-6]$/.test(tag)) {
       const t = cut(txt(el.textContent), 100);
-      if (t) row(depth, null, 'Heading[' + tag[1] + ']', t, '', '', null, '');
+      if (t) {
+        const r = el.getBoundingClientRect();
+        items.push({ act: false, inView: rectInView(r), depth, role: 'Heading[' + tag[1] + ']', name: t, value: '', id: '', rect: null, flags: '' });
+      }
     } else if (LANDMARK[tag] !== undefined || el.getAttribute('role') === 'dialog') {
       const label = LANDMARK[tag] || (el.getAttribute('role') === 'dialog' ? 'Dialog' : '');
       const aria = el.getAttribute('aria-label') || '';
       if (label && (tag !== 'SECTION' || aria)) {
-        row(depth, null, label, cut(txt(aria), 60), '', '', null, '');
+        const r = el.getBoundingClientRect();
+        items.push({ act: false, inView: rectInView(r), depth, role: label, name: cut(txt(aria), 60), value: '', id: '', rect: null, flags: '' });
         d = depth + 1;
       }
     } else if (withText && TEXT_TAGS.has(tag)) {
       const t = cut(txt(el.textContent), 120);
-      if (t) row(depth, null, 'Text', t, '', '', null, '');
+      if (t) {
+        const r = el.getBoundingClientRect();
+        items.push({ act: false, inView: rectInView(r), depth, role: 'Text', name: t, value: '', id: '', rect: null, flags: '' });
+      }
     } else if (tag === 'IMG' && withText) {
       const a = txt(el.getAttribute('alt'));
-      if (a) row(depth, null, 'Image', cut(a, 80), '', '', null, '');
+      if (a) {
+        const r = el.getBoundingClientRect();
+        items.push({ act: false, inView: rectInView(r), depth, role: 'Image', name: cut(a, 80), value: '', id: '', rect: null, flags: '' });
+      }
     }
 
     if (tag === 'IFRAME' || tag === 'FRAME') {
@@ -204,12 +214,12 @@ export function readPage(opts) {
       try { doc = el.contentDocument; } catch (e) { doc = null; }
       if (doc && doc.body) {
         const fr = el.getBoundingClientRect();
-        row(d, null, 'Frame', cut(el.title || el.name || '', 60), '', '', null, '');
+        items.push({ act: false, inView: rectInView(fr), depth: d, role: 'Frame', name: cut(el.title || el.name || '', 60), value: '', id: '', rect: null, flags: '' });
         walk(doc.body, d + 1, ox + fr.left, oy + fr.top);
       } else {
         let host = '';
         try { host = new URL(el.src, location.href).host; } catch (e) { /* ignore */ }
-        row(d, null, 'Frame', cut(el.title || host, 60), '', '', null, 'cross-origin');
+        items.push({ act: false, inView: true, depth: d, role: 'Frame', name: cut(el.title || host, 60), value: '', id: '', rect: null, flags: 'cross-origin' });
       }
       return;
     }
@@ -218,6 +228,34 @@ export function readPage(opts) {
   }
 
   walk(document.documentElement, 0, 0, 0);
+
+  let selected = items;
+  if (items.length > max) {
+    truncated = true;
+    const inViewItems = items.filter((x) => x.inView);
+    const offViewItems = items.filter((x) => !x.inView);
+    selected = inViewItems.concat(offViewItems).slice(0, max);
+  }
+
+  for (const it of selected) {
+    let idx = null;
+    if (it.act) {
+      idx = refs.length;
+      refs.push(it.el);
+      meta.push({ role: it.role, name: it.name, id: it.id || it.name });
+      interactive++;
+    }
+    let s = '  '.repeat(it.depth) + '- ';
+    if (idx !== null) s += '[' + idx + '] ';
+    s += it.role;
+    if (it.name) s += ' "' + it.name.replace(/"/g, "'") + '"';
+    if (it.value) s += ' value="' + it.value.replace(/"/g, "'") + '"';
+    if (it.flags) s += ' ' + it.flags;
+    if (it.id) s += ' id=' + it.id;
+    if (it.rect) s += ' @(' + it.rect.join(',') + ')';
+    rows.push(s);
+  }
+
   // the isolated world of this frame keeps the elements so later calls can act on [N]
   globalThis.__fastuse = { snap: opts.snap || '', refs, meta };
 
@@ -225,7 +263,7 @@ export function readPage(opts) {
   return {
     url: location.href,
     title: document.title,
-    viewport: { w: window.innerWidth, h: window.innerHeight, scrollX: Math.round(window.scrollX), scrollY: Math.round(window.scrollY), pageH: de.scrollHeight },
+    viewport: { w: vw, h: vh, scrollX: Math.round(window.scrollX), scrollY: Math.round(window.scrollY), pageH: de.scrollHeight },
     count: interactive,
     rows: rows.length,
     truncated,

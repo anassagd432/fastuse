@@ -331,7 +331,7 @@ async function actRun(p) {
         retried = true;
         tab = (await settle(tab.id)) || tab;
         try {
-          await read(tab, { max: p.max, text: p.text, snap: p.snap });
+          await read(tab, { max: Math.max(p.max || 0, 250), text: p.text, snap: p.snap });
           continue;
         } catch (e) {
           log.push(cur + 1 + '. ' + (out.log[done] || 'FAILED'));

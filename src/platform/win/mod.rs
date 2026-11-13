@@ -79,6 +79,9 @@ impl Platform for WinPlatform {
             Ok(how) => Ok(how.to_string()),
             Err(e) => {
                 if let Some((cx, cy)) = center {
+                    if cx <= -30000 || cy <= -30000 {
+                        return Err("target window appears minimized/offscreen; retry with delivery_mode:\"foreground\" to restore and click it".into());
+                    }
                     if let Ok(how) = input::click_screen_bg(cx, cy) {
                         return Ok(format!("{how} (UIA fallback)"));
                     }

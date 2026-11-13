@@ -69,13 +69,6 @@ const BROWSER_KEYS: &[(&str, &str)] = &[
     ("Edge", r"Software\Microsoft\Edge\NativeMessagingHosts"),
 ];
 
-#[cfg(windows)]
-const BROWSER_EXT_KEYS: &[(&str, &str)] = &[
-    ("Chrome", r"Software\Google\Chrome\Extensions"),
-    ("Brave", r"Software\BraveSoftware\Brave-Browser\Extensions"),
-    ("Edge", r"Software\Microsoft\Edge\Extensions"),
-];
-
 #[cfg(target_os = "macos")]
 const BROWSER_DIRS: &[(&str, &str)] = &[
     ("Chrome", "Library/Application Support/Google/Chrome/NativeMessagingHosts"),
@@ -84,28 +77,12 @@ const BROWSER_DIRS: &[(&str, &str)] = &[
     ("Chromium", "Library/Application Support/Chromium/NativeMessagingHosts"),
 ];
 
-#[cfg(target_os = "macos")]
-const BROWSER_EXT_DIRS: &[(&str, &str)] = &[
-    ("Chrome", "Library/Application Support/Google/Chrome/External Extensions"),
-    ("Brave", "Library/Application Support/BraveSoftware/Brave-Browser/External Extensions"),
-    ("Edge", "Library/Application Support/Microsoft Edge/External Extensions"),
-    ("Chromium", "Library/Application Support/Chromium/External Extensions"),
-];
-
 #[cfg(all(unix, not(target_os = "macos")))]
 const BROWSER_DIRS: &[(&str, &str)] = &[
     ("Chrome", ".config/google-chrome/NativeMessagingHosts"),
     ("Brave", ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
     ("Edge", ".config/microsoft-edge/NativeMessagingHosts"),
     ("Chromium", ".config/chromium/NativeMessagingHosts"),
-];
-
-#[cfg(all(unix, not(target_os = "macos")))]
-const BROWSER_EXT_DIRS: &[(&str, &str)] = &[
-    ("Chrome", ".config/google-chrome/External Extensions"),
-    ("Brave", ".config/BraveSoftware/Brave-Browser/External Extensions"),
-    ("Edge", ".config/microsoft-edge/External Extensions"),
-    ("Chromium", ".config/chromium/External Extensions"),
 ];
 
 pub fn install() -> Result<String, String> {
@@ -152,19 +129,6 @@ pub fn install() -> Result<String, String> {
             .unwrap_or(false);
         report += &format!("{name} host: {}\n", if ok { "registered" } else { "FAILED to register" });
     }
-    #[cfg(windows)]
-    for (name, key) in BROWSER_EXT_KEYS {
-        let full = format!(r"HKCU\{key}\{EXTENSION_ID}");
-        let ok = std::process::Command::new("reg")
-            .args(["add", &full, "/v", "path", "/t", "REG_SZ", "/d", &ext_dir.display().to_string(), "/f"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        let _ = std::process::Command::new("reg")
-            .args(["add", &full, "/v", "version", "/t", "REG_SZ", "/d", "0.0.1", "/f"])
-            .output();
-        report += &format!("{name} ext:  {}\n", if ok { "registered" } else { "skipped" });
-    }
     #[cfg(unix)]
     {
         let home = std::env::var("HOME").map_err(|_| "HOME is not set")?;
@@ -179,20 +143,11 @@ pub fn install() -> Result<String, String> {
             let ok = std::fs::create_dir_all(&dir).is_ok() && std::fs::copy(&mp, dir.join(format!("{HOST_NAME}.json"))).is_ok();
             report += &format!("{name} host: {}\n", if ok { "registered" } else { "FAILED to register" });
         }
-        let ext_json = json!({
-            "external_path": ext_dir.display().to_string(),
-        });
-        for (name, rel) in BROWSER_EXT_DIRS {
-            let dir = PathBuf::from(&home).join(rel);
-            let browser_root = dir.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-            if browser_root.exists() {
-                let _ = std::fs::create_dir_all(&dir);
-                let _ = std::fs::write(dir.join(format!("{EXTENSION_ID}.json")), serde_json::to_string_pretty(&ext_json).unwrap());
-                report += &format!("{name} ext:  registered\n");
-            }
-        }
     }
-    report += &format!("\nExtension installed to {}.\nTo launch your browser with the extension immediately loaded, run:\n  fastuse browser-open", ext_dir.display());
+    report += &format!(
+        "\nExtension unpacked to: {}\nLoad it automatically via `fastuse browser-open`, or once via Developer Mode -> 'Load unpacked' at chrome://extensions / brave://extensions.",
+        ext_dir.display()
+    );
     Ok(report)
 }
 

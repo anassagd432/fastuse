@@ -2,7 +2,7 @@
 
 # ⚡ fastuse
 
-**Ultra-fast, zero-focus-steal Computer Use & Browser Use MCP server for Claude Code, Cursor, Windsurf, Claude Desktop, and Antigravity.**
+**Ultra-fast, zero-focus-steal Computer Use & Browser Use MCP server for ChatGPT Codex, Claude Code, Cursor, Windsurf, Claude Desktop, Antigravity, Ollama, and local GGUF models.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20macOS-informational.svg)]()
@@ -60,33 +60,41 @@ irm https://github.com/anassagd432/fastuse/releases/latest/download/install.ps1 
 curl -fsSL https://raw.githubusercontent.com/anassagd432/fastuse/main/install.sh | bash
 ```
 
-Both installers unpack the binary, add `fastuse` to your `PATH`, extract the embedded browser extension, and register native messaging hosts for Chrome, Brave, and Edge.
+Both installers unpack the binary, add `fastuse` to your `PATH`, extract the browser extension, register native messaging hosts for Chrome/Brave/Edge, and automatically run `fastuse setup` to configure **ChatGPT Codex CLI & Desktop app**, **Claude Code**, **Claude Desktop**, **Cursor**, **Windsurf**, and **Antigravity**.
 
 ---
 
-### Step 2 — Connect Your AI Client (MCP)
+### Step 2 — Or Ask Your AI Agent to Install & Connect It Directly
 
-<details open>
-<summary><b>Claude Code (CLI)</b></summary>
+Paste this into **ChatGPT Codex**, **Claude Code**, **Cursor**, or **Antigravity**:
 
-*Windows:*
+```markdown
+Install and connect `fastuse` for desktop + browser automation:
+1. Install via `irm https://github.com/anassagd432/fastuse/releases/latest/download/install.ps1 | iex` (Windows) or `curl -fsSL https://raw.githubusercontent.com/anassagd432/fastuse/main/install.sh | bash` (macOS/Linux) if not already installed.
+2. Run `fastuse setup` and `fastuse doctor` so MCP, skills, and browser native messaging are registered for Codex, Claude, Cursor, and Antigravity.
+3. For browser tasks: `browser_act` auto-connects a browser; if the user already has Brave/Chrome open with logged-in tabs and the extension isn't attached there yet, use desktop `act` directly on that browser window (UIA/mouse/keyboard) or load `fastuse extension-path` at `chrome://extensions` / `brave://extensions` (`Developer mode` -> `Load unpacked`).
+```
+
+Manual MCP setup (if you ever configure a custom client by hand):
+
+<details>
+<summary><b>ChatGPT Codex / Claude Code / Cursor / Claude Desktop</b></summary>
+
+Running `fastuse setup` configures all installed clients automatically. For manual registration:
+
+*Codex CLI / Desktop (`~/.codex/config.toml`):*
+```toml
+[mcp_servers.fastuse]
+command = "fastuse"
+args = []
+```
+
+*Claude Code (CLI):*
 ```powershell
 claude mcp add fastuse -- "$env:LOCALAPPDATA\Programs\fastuse\fastuse.exe"
 ```
 
-*macOS / Linux:*
-```bash
-claude mcp add fastuse -- "$HOME/.local/bin/fastuse"
-```
-
-</details>
-
-<details>
-<summary><b>Cursor / Claude Desktop / Windsurf / VS Code (<code>mcpServers</code> JSON)</b></summary>
-
-Add `fastuse` to your client's `mcp_config.json` / `claude_desktop_config.json`:
-
-*Windows:*
+*Cursor / Claude Desktop / Windsurf (`mcpServers` JSON):*
 ```json
 {
   "mcpServers": {
@@ -96,32 +104,7 @@ Add `fastuse` to your client's `mcp_config.json` / `claude_desktop_config.json`:
   }
 }
 ```
-*(Or use the full path `%LOCALAPPDATA%\Programs\fastuse\fastuse.exe` if your app hasn't picked up the updated `PATH` yet.)*
-
-*macOS:*
-```json
-{
-  "mcpServers": {
-    "fastuse": {
-      "command": "/Users/YOUR_USER/.local/bin/fastuse"
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>Antigravity (One-Prompt Setup)</b></summary>
-
-`install.ps1` and `install.sh` automatically register the `fastuse` MCP server, `SKILL.md`, and routing rules with Antigravity (`agy`). To verify or configure from scratch inside chat:
-
-```markdown
-Verify or install `fastuse`:
-1. Ensure `fastuse` is installed (`fastuse --version`) or run the installer for my OS.
-2. Ensure `fastuse` MCP server is registered and `skills/fastuse/SKILL.md` is installed.
-3. Run `fastuse doctor` and `fastuse browser-open` to verify desktop and browser readiness.
-```
+*(Or use the full path `%LOCALAPPDATA%\Programs\fastuse\fastuse.exe` on Windows or `~/.local/bin/fastuse` on macOS.)*
 
 </details>
 
@@ -160,8 +143,8 @@ Operates inside your Chromium browser via the embedded MV3 extension + native me
 
 | Tool | Description |
 |---|---|
-| `browser_act` | Execute complete web flows in one call (`navigate`, `new_tab`, `switch_tab`, `close_tab`, `back`, `forward`, `reload`, `click`, `double_click`, `right_click`, `hover`, `fill`, `type`, `select`, `press`, `scroll`, `wait`) and receive the updated DOM tree. |
-| `browser_state` | Reads visible tabs, headings, buttons, inputs, links, and selectable controls as a compact indexed tree. |
+| `browser_act` | Execute complete web flows in one call (`navigate`, `new_tab`, `switch_tab`, `close_tab`, `back`, `forward`, `reload`, `click`, `double_click`, `right_click`, `hover`, `fill`, `type`, `select`, `press`, `scroll`, `wait`). Supports `observe: false` (zero tree tokens after final step), `diff: true` (delta-only updates), and `filter`. |
+| `browser_state` | Reads visible tabs as a compact viewport-prioritized tree (45 rows default, zero coordinates/IDs unless `details: true`). |
 
 ```json
 {
@@ -179,19 +162,37 @@ Operates any Win32, WPF, WinUI, Cocoa, AppKit, or Electron desktop application:
 
 | Tool | Description |
 |---|---|
-| `act` | Execute an end-to-end desktop batch in one turn (`click`, `double_click`, `right_click`, `set_value`, `type_text`, `press_key`, `hotkey`, `scroll`, `wait`) against a window by title substring, `window_id`, or `pid`. |
-| `get_window_state` | Reads an app's UI hierarchy as indexed controls with roles, names, and bounds. |
+| `act` | Execute an end-to-end desktop batch in one turn (`click`, `double_click`, `right_click`, `set_value`, `type_text`, `press_key`, `hotkey`, `scroll`, `wait`). Supports `observe: false`, `diff: true`, and `filter`. |
+| `get_window_state` | Reads an app's UI hierarchy cleanly (`max_elements`, `filter`, `diff`, `details`). |
 | `list_windows` | Lists all visible top-level windows with title, PID, process name, and bounds in `< 1 ms`. |
 | `screenshot` | Background window capture (`PrintWindow` / `BitBlt`) or desktop capture, cropped and JPEG-encoded (used only as fallback for canvas/media views). |
 
 ```json
 {
   "window": "Notepad",
+  "observe": false,
   "steps": [
     { "tool": "type_text", "text": "Written in the background with zero focus steal.\n" },
     { "tool": "hotkey", "keys": "ctrl+s" }
   ]
 }
+```
+
+### 3. Local Models — Ollama & GGUF (`delegate`, `fastuse run`)
+Stop burning expensive Claude Code, Cursor, or Codex quota on multi-step UI loops. Run UI automation 100% locally at zero token cost via **Ollama** or any local **`.gguf`** model (`llama-server`):
+
+* **MCP Offload (`delegate` tool):** Frontier models call `delegate` once (`~80 tokens`); `fastuse` runs the full UI/browser loop on your local Ollama/GGUF model without sending repo context on every click, returning a single summary line.
+* **Standalone CLI:**
+```bash
+# Inspect local Ollama & llama-server backends
+fastuse models
+
+# Auto-detect local Ollama, llama-server, or API key
+fastuse run "Open Notepad and type a release checklist"
+
+# Target a specific Ollama model or local .gguf file directly
+fastuse run --provider ollama --model qwen2.5:7b "Open github.com in Brave and check issues"
+fastuse run --gguf ./models/qwen2.5-7b-instruct-q4_k_m.gguf "Open Calculator and compute 42 * 19"
 ```
 
 ---

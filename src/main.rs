@@ -6,6 +6,7 @@ mod platform;
 #[cfg(feature = "runner")]
 mod runner;
 mod server;
+mod setup;
 mod tools;
 
 use std::io::{BufRead, Write};
@@ -18,12 +19,20 @@ fn print_help() {
 USAGE:\n  fastuse                            Run MCP JSON-RPC server over stdio\n  \
 fastuse --version                  Print version\n  \
 fastuse --help                     Show this help message\n  \
+fastuse setup [--no-agy]           Auto-configure MCP + skills for Codex, Claude, Cursor & Antigravity\n  \
 fastuse doctor                     Check OS automation, overlay, and browser bridge health\n  \
 fastuse browser-install            Unpack extension & register native messaging host\n  \
+fastuse extension-path             Print unpacked browser extension folder path\n  \
 fastuse browser-open [flags] [url] Launch Chromium browser with fastuse extension loaded\n      \
 --relaunch                     Restart running browser (preserves tabs & logins)\n      \
 --isolated                     Launch in a separate automation profile\n  \
 fastuse browser-uninstall          Remove native messaging registration\n  \
+fastuse models                     Inspect local Ollama / llama-server (GGUF) backends\n  \
+fastuse run [opts] \"task\"          Run autonomous task via Ollama, GGUF, OpenAI, or Gemini\n      \
+--provider <name>              auto | ollama | gguf | llamacpp | openai | gemini\n      \
+--model <name>                 Model ID (e.g. qwen2.5:7b, llama3.2, gpt-4o-mini)\n      \
+--gguf <path>                  Local .gguf model path (spawns llama-server)\n      \
+--endpoint <url>               Custom OpenAI-compatible base URL\n  \
 fastuse demo                       Run a quick local cursor/overlay demo\n  \
 fastuse call <tool> '<json>'       Invoke a single MCP tool directly from CLI",
         env!("CARGO_PKG_VERSION")
@@ -55,11 +64,22 @@ fn main() {
         print_help();
         return;
     }
+    #[cfg(feature = "runner")]
+    if argv.get(1).map(|s| s.as_str()) == Some("models") {
+        print!("{}", runner::list_models());
+        return;
+    }
     // the browser starts us as its native host; no desktop backend and nothing else on stdout
     if browser::is_host_invocation(&argv) {
         std::process::exit(browser::host_main());
     }
+    if argv.get(1).map(|s| s.as_str()) == Some("extension-path") {
+        let _ = browser::install();
+        println!("{}", browser::extension_dir().display());
+        return;
+    }
     let setup = match argv.get(1).map(|s| s.as_str()) {
+        Some("setup") => Some(setup::run(argv[2..].iter().any(|a| a == "--no-agy"))),
         Some("browser-install") => Some(browser::install()),
         Some("browser-uninstall") => Some(browser::uninstall()),
         Some("browser-open") => Some(parse_browser_open(&argv[2..])),

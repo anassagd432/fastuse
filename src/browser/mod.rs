@@ -21,19 +21,44 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-pub use install::{install, open_browser, uninstall};
+pub use install::{extension_dir, install, open_browser, uninstall};
 
-pub const NO_BROWSER: &str = "No browser is connected. Run `fastuse browser-open` or ensure the fastuse extension is enabled in Brave/Chrome/Edge (`fastuse doctor` shows status).";
+pub fn no_browser_err() -> String {
+    format!(
+        "No connected Chromium browser extension host found.\n\
+         - Auto-connect: run `fastuse browser-open` (or `--relaunch` with user confirmation to keep existing tabs/logins).\n\
+         - Existing open browser: use desktop `act`/`get_window_state` (`window: \"Brave\"` or `\"Chrome\"` or `\"Edge\"`) with mouse/keyboard directly, OR use `act` inside chrome://extensions / brave://extensions -> Developer mode -> Load unpacked -> \"{}\".",
+        extension_dir().display()
+    )
+}
 
 pub fn data_dir() -> PathBuf {
     #[cfg(windows)]
     {
-        PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into())).join("fastuse")
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            return PathBuf::from(local).join("fastuse");
+        }
+        PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into()))
+            .join("AppData")
+            .join("Local")
+            .join("fastuse")
     }
     #[cfg(not(windows))]
     {
         PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".fastuse")
     }
+}
+
+fn hosts_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![data_dir().join("hosts")];
+    #[cfg(windows)]
+    if let Ok(up) = std::env::var("USERPROFILE") {
+        let p = PathBuf::from(up).join("AppData").join("Local").join("fastuse").join("hosts");
+        if !dirs.contains(&p) {
+            dirs.push(p);
+        }
+    }
+    dirs
 }
 
 fn hosts_dir() -> PathBuf {
@@ -150,22 +175,32 @@ struct HostInfo {
     path: PathBuf,
 }
 
-/// Running hosts, newest first.
+/// Running hosts across all candidate host directories, newest first.
 fn hosts() -> Vec<HostInfo> {
-    let mut v: Vec<HostInfo> = std::fs::read_dir(hosts_dir())
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| {
-            let j: Value = serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok()?;
-            Some(HostInfo {
-                endpoint: j.get("endpoint")?.as_str()?.to_string(),
+    let mut seen = std::collections::HashSet::new();
+    let mut v: Vec<HostInfo> = Vec::new();
+    for dir in hosts_dirs() {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let Some(j) = std::fs::read_to_string(e.path())
+                .ok()
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            else {
+                continue;
+            };
+            let Some(endpoint) = j.get("endpoint").and_then(|x| x.as_str()).map(String::from) else {
+                continue;
+            };
+            if !seen.insert(endpoint.clone()) {
+                continue;
+            }
+            v.push(HostInfo {
+                endpoint,
                 browser: j.get("browser").and_then(|b| b.as_str()).unwrap_or("browser").to_string(),
                 started: j.get("started").and_then(|s| s.as_u64()).unwrap_or(0),
                 path: e.path(),
-            })
-        })
-        .collect();
+            });
+        }
+    }
     v.sort_by(|a, b| b.started.cmp(&a.started));
     v
 }
@@ -183,11 +218,15 @@ fn live_hosts() -> Vec<HostInfo> {
     live
 }
 
-/// Ask the browser extension to run `method`. Stale host files are removed on the way.
-pub fn call(method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+enum CallErr {
+    NoHost,
+    Msg(String),
+}
+
+fn call_raw(method: &str, params: Value, timeout: Duration) -> Result<Value, CallErr> {
     let hs = hosts();
     if hs.is_empty() {
-        return Err(NO_BROWSER.to_string());
+        return Err(CallErr::NoHost);
     }
     for h in hs {
         let stream = match ipc::connect(&h.endpoint) {
@@ -210,29 +249,78 @@ pub fn call(method: &str, params: Value, timeout: Duration) -> Result<Value, Str
         });
         return match rx.recv_timeout(timeout) {
             Ok(Ok(line)) => {
-                let v: Value = serde_json::from_str(&line).map_err(|e| format!("bad reply from the browser host: {e}"))?;
+                let v: Value = serde_json::from_str(&line)
+                    .map_err(|e| CallErr::Msg(format!("bad reply from the browser host: {e}")))?;
                 match v.get("error") {
-                    Some(e) => Err(e.as_str().map(String::from).unwrap_or_else(|| e.to_string())),
+                    Some(e) => Err(CallErr::Msg(e.as_str().map(String::from).unwrap_or_else(|| e.to_string()))),
                     None => Ok(v.get("result").cloned().unwrap_or(Value::Null)),
                 }
             }
-            Ok(Err(e)) => Err(format!("browser host connection failed: {e}")),
-            Err(_) => Err("the browser did not answer in time".to_string()),
+            Ok(Err(e)) => Err(CallErr::Msg(format!("browser host connection failed: {e}"))),
+            Err(_) => Err(CallErr::Msg("the browser did not answer in time".to_string())),
         };
     }
-    Err(NO_BROWSER.to_string())
+    Err(CallErr::NoHost)
+}
+
+/// Ask the browser extension to run `method`. Auto-launches a connected browser if none is attached.
+pub fn call_auto(method: &str, params: Value, timeout: Duration) -> Result<(Value, Option<String>), String> {
+    match call_raw(method, params.clone(), timeout) {
+        Ok(v) => Ok((v, None)),
+        Err(CallErr::Msg(e)) => Err(e),
+        Err(CallErr::NoHost) => {
+            if cfg!(test) || std::env::var_os("FASTUSE_NO_AUTOLAUNCH").is_some() {
+                return Err(no_browser_err());
+            }
+            let Ok(launch_msg) = open_browser(None, false, false) else {
+                return Err(no_browser_err());
+            };
+            let deadline = Instant::now() + Duration::from_secs(6);
+            while Instant::now() < deadline {
+                if !live_hosts().is_empty() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            let note = if launch_msg.contains("isolated fastuse profile") {
+                Some(format!(
+                    "note: auto-opened an isolated browser because your existing browser has not loaded the extension yet. To act on your existing tabs/sessions directly, use desktop `act`/`get_window_state` on that browser window (with mouse/keyboard), or load `{}` in chrome://extensions / brave://extensions (`Load unpacked`), or run `fastuse browser-open --relaunch`.",
+                    extension_dir().display()
+                ))
+            } else {
+                None
+            };
+            match call_raw(method, params, timeout) {
+                Ok(v) => Ok((v, note)),
+                Err(CallErr::Msg(e)) => Err(match note {
+                    Some(n) => format!("{n}\n{e}"),
+                    None => e,
+                }),
+                Err(CallErr::NoHost) => Err(no_browser_err()),
+            }
+        }
+    }
+}
+
+pub fn call(method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+    match call_raw(method, params, timeout) {
+        Ok(v) => Ok(v),
+        Err(CallErr::Msg(e)) => Err(e),
+        Err(CallErr::NoHost) => Err(no_browser_err()),
+    }
 }
 
 pub struct Browser {
     snap: u64,
+    last_trees: HashMap<i64, String>,
 }
 
 impl Browser {
     pub fn new() -> Self {
-        Self { snap: 0 }
+        Self { snap: 0, last_trees: HashMap::new() }
     }
 
-    /// `browser_state`: the allowed tabs plus the compact tree of one of them.
+    /// `browser_state`: compact tree of the active/selected tab (plus tabs when helpful).
     pub fn state(&mut self, a: &Value) -> Result<String, String> {
         let mut params = json!({});
         for k in ["tab", "text"] {
@@ -243,16 +331,41 @@ impl Browser {
         if let Some(n) = a.get("max_elements") {
             params["max"] = n.clone();
         }
-        let st = call("page.state", params, Duration::from_secs(30))?;
+        let details = a.get("details").and_then(|v| v.as_bool()).unwrap_or(false);
+        let diff = a.get("diff").and_then(|v| v.as_bool()).unwrap_or(false);
+        let filter = a.get("filter").and_then(|v| v.as_str());
+        let (st, auto_note) = call_auto("page.state", params, Duration::from_secs(30))?;
         let tabs = match st.get("tabs") {
             Some(t) if t.is_object() => t.clone(),
             _ => call("tabs.list", json!({}), Duration::from_secs(10))?,
         };
         self.snap += 1;
-        Ok(format_state(&tabs, &st, &format!("s{:08}", self.snap)))
+        let sid = format!("s{:08}", self.snap);
+        let prefix = match auto_note {
+            Some(n) => format!("{n}\n"),
+            None => String::new(),
+        };
+        if details && filter.is_none() && !diff {
+            let tab_id = st["tab"]["id"].as_i64().unwrap_or(0);
+            let compact = crate::platform::format_tree_compact(st["page"]["text"].as_str().unwrap_or(""), false, None);
+            self.last_trees.insert(tab_id, compact);
+            return Ok(format!("{prefix}{}", format_state(&tabs, &st, &sid)));
+        }
+        let tab_id = st["tab"]["id"].as_i64().unwrap_or(0);
+        let raw = st["page"]["text"].as_str().unwrap_or("");
+        let compact = crate::platform::format_tree_compact(raw, details, filter);
+        let prev = if diff { self.last_trees.get(&tab_id).cloned() } else { None };
+        if filter.is_none() {
+            self.last_trees.insert(tab_id, compact.clone());
+        }
+        let body = match prev {
+            Some(ref p) => crate::platform::diff_tree(p, &compact),
+            None => compact,
+        };
+        Ok(format!("{prefix}{}", format_state_compact(Some(&tabs), &st, &sid, &body)))
     }
 
-    /// `browser_act`: run steps in the agent's own tabs, then return the new page state.
+    /// `browser_act`: run steps in the agent's own tabs, then return the compact new page state.
     pub fn act(&mut self, a: &Value) -> Result<String, String> {
         let steps = a.get("steps").and_then(|s| s.as_array()).ok_or("steps is required")?;
         let t0 = Instant::now();
@@ -269,7 +382,17 @@ impl Browser {
         if let Some(n) = a.get("max_elements") {
             params["max"] = n.clone();
         }
-        let r = call("act.run", params, Duration::from_secs(120))?;
+        let details = a.get("details").and_then(|v| v.as_bool()).unwrap_or(false);
+        let diff = a.get("diff").and_then(|v| v.as_bool()).unwrap_or(false);
+        let filter = a.get("filter").and_then(|v| v.as_str());
+        let has_tab_step = steps.iter().any(|s| {
+            matches!(
+                s.get("tool").and_then(|v| v.as_str()),
+                Some("new_tab" | "switch_tab" | "close_tab")
+            )
+        });
+
+        let (r, auto_note) = call_auto("act.run", params, Duration::from_secs(120))?;
         let failed = r.get("failed").and_then(|f| f.as_bool()).unwrap_or(false);
         let mut out = format!(
             "browser_act: {} step(s), {:.0} ms{}\n",
@@ -277,6 +400,9 @@ impl Browser {
             t0.elapsed().as_secs_f64() * 1000.0,
             if failed { " (stopped at failure)" } else { "" }
         );
+        if let Some(n) = auto_note {
+            out += &format!("{n}\n");
+        }
         for l in r.get("log").and_then(|l| l.as_array()).into_iter().flatten() {
             out += l.as_str().unwrap_or("");
             out.push('\n');
@@ -286,13 +412,37 @@ impl Browser {
         }
         if let Some(st) = r.get("state") {
             self.snap += 1;
-            let tabs = match r.get("tabs").or_else(|| st.get("tabs")) {
-                Some(t) if t.is_object() => t.clone(),
-                _ => call("tabs.list", json!({}), Duration::from_secs(10))?,
+            let sid = format!("s{:08}", self.snap);
+            let tabs = if details || has_tab_step {
+                match r.get("tabs").or_else(|| st.get("tabs")) {
+                    Some(t) if t.is_object() => Some(t.clone()),
+                    _ => call("tabs.list", json!({}), Duration::from_secs(10)).ok(),
+                }
+            } else {
+                None
             };
-            let st = json!({"tab": st["tab"], "page": st["page"], "browser": r["browser"]});
+            let st_view = json!({"tab": st["tab"], "page": st["page"], "browser": r["browser"]});
+            let tab_id = st["tab"]["id"].as_i64().unwrap_or(0);
+            let raw = st["page"]["text"].as_str().unwrap_or("");
+            let compact = crate::platform::format_tree_compact(raw, details, filter);
+            let prev = if diff { self.last_trees.get(&tab_id).cloned() } else { None };
+            if filter.is_none() {
+                self.last_trees.insert(tab_id, compact.clone());
+            }
             out += "\n";
-            out += &format_state(&tabs, &st, &format!("s{:08}", self.snap));
+            if details && filter.is_none() && !diff {
+                if let Some(ref t) = tabs {
+                    out += &format_state(t, &st_view, &sid);
+                } else {
+                    out += &format_state_compact(None, &st_view, &sid, &compact);
+                }
+            } else {
+                let body = match prev {
+                    Some(ref p) => crate::platform::diff_tree(p, &compact),
+                    None => compact,
+                };
+                out += &format_state_compact(tabs.as_ref(), &st_view, &sid, &body);
+            }
         }
         if failed {
             Err(out)
@@ -351,6 +501,28 @@ fn format_state(tabs: &Value, st: &Value, snapshot: &str) -> String {
         snapshot,
     );
     s += page["text"].as_str().unwrap_or("");
+    s
+}
+
+fn format_state_compact(tabs: Option<&Value>, st: &Value, snapshot: &str, body: &str) -> String {
+    let tab = &st["tab"];
+    let page = &st["page"];
+    let selected = tab.get("id").and_then(|i| i.as_i64());
+    let mut s = String::new();
+    if let Some(t) = tabs {
+        s += &format_tabs(t, selected);
+    }
+    s += &format!(
+        "tab={} \"{}\" {} snapshot={} elements={}{} ({}ms)\n",
+        tab["id"],
+        page["title"].as_str().unwrap_or("").chars().take(60).collect::<String>().replace('"', "'"),
+        page["url"].as_str().unwrap_or("").chars().take(100).collect::<String>(),
+        snapshot,
+        page["count"],
+        if page["truncated"].as_bool().unwrap_or(false) { " truncated=true" } else { "" },
+        page["ms"],
+    );
+    s += body;
     s
 }
 

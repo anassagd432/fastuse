@@ -1,6 +1,6 @@
 [package]
 name = "fastuse"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Fast computer-use MCP server: UI tree + actions + screenshots, background-first (Windows today, macOS and Linux planned)"
 license = "MIT"

@@ -50,11 +50,11 @@ Run a complete sequence in **one turn**:
 }
 ```
 
-### Auto-Connecting the Browser
-If `browser_act` or `browser_state` returns `NO_BROWSER`:
-Run `fastuse browser-open` in the terminal (or `fastuse browser-open "https://..."`).
-- If the browser is not running, it launches with the embedded extension loaded and all user logins intact.
-- If the browser is already running without the extension, it opens an isolated fastuse session automatically (or pass `fastuse browser-open --relaunch` to restart the user's main browser with tabs/logins preserved and the extension attached).
+### Auto-Connecting or Operating Already-Open Browsers
+`browser_act` and `browser_state` auto-launch a connected Chromium browser if none is attached. If the user's **existing logged-in browser window** (e.g. Brave, Chrome, or Edge) was already running without the extension loaded, you have 3 seamless options:
+1. **Operate the open browser directly via desktop `act` / `get_window_state`** (`window: "Brave"` or `"Chrome"`): read its tabs/address bar/web UI tree via UIA and click/type directly (use `delivery_mode: "foreground"` for real mouse clicks when background `InvokePattern` isn't supported). Zero restarts, keeps active tabs untouched.
+2. **Load the extension into the already-open browser via `act` without restarting:** run `fastuse extension-path` to get the unpacked folder (e.g. `%LOCALAPPDATA%\fastuse\extension`), press `ctrl+t`, navigate to `brave://extensions` or `chrome://extensions`, toggle **Developer mode**, click **Load unpacked**, select that folder, and switch back to the user's tab (`browser_act` then connects to all tabs in that window!).
+3. **`fastuse browser-open --relaunch`** (ask confirmation first, as it restarts the browser with `--restore-last-session`).
 
 Supported step tools in `browser_act`:
 - `navigate` (`url`): loads URL in active or new tab.
@@ -67,12 +67,18 @@ Supported step tools in `browser_act`:
 - `wait`: `{ "tool": "wait", "ms": 300 }` or `{ "tool": "wait", "text": "Results" }`.
 - `new_tab`, `switch_tab`, `close_tab`, `back`, `forward`, `reload`.
 
+### 4. Save 70–95% of LLM Tokens
+- Pass `"observe": false` on the **final** `act` / `browser_act` call so fastuse returns a 1-line confirmation instead of re-printing the tree.
+- Pass `"diff": true` on repeated steps in the same window/tab to receive only changed/new elements.
+- Pass `"filter": "keyword"` when searching huge pages/settings panels.
+- **Offload multi-step UI loops via `delegate`:** When a local Ollama or `llama-server` GGUF model (or cheap runner key) is running, call `delegate` once with the full goal instead of driving 8 frontier turns with coding context attached.
+
 ### Reading Page State (`browser_state`)
-Only needed when you need to inspect an unfamiliar page before acting:
+Only needed when inspecting an unfamiliar page before acting (returns compact viewport-first 45-row tree):
 ```json
 {
-  "text": true,
-  "max_elements": 60
+  "max_elements": 45,
+  "filter": "search"
 }
 ```
 

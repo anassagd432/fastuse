@@ -51,49 +51,16 @@ try {
     }
 
     & $exe --version
-    & $exe browser-install | Out-Host
-
-    if (-not $NoAgy) {
-        if (Get-Command agy -ErrorAction SilentlyContinue) {
-            Write-Host "==> registering with Antigravity"
-            agy mcp add fastuse $exe | Out-Host
-        }
-        foreach ($skillRoot in @(
-            (Join-Path $env:USERPROFILE ".gemini\antigravity\global_skills\fastuse"),
-            (Join-Path $env:USERPROFILE ".gemini\config\skills\fastuse")
-        )) {
-            New-Item -ItemType Directory -Force $skillRoot | Out-Null
-            Copy-Item (Join-Path $dir "skills\fastuse\SKILL.md") (Join-Path $skillRoot "SKILL.md") -Force
-        }
-        $geminiMd = Join-Path $env:USERPROFILE ".gemini\config\GEMINI.md"
-        New-Item -ItemType Directory -Force (Split-Path $geminiMd) | Out-Null
-        $ruleBlock = @"
-
-<!-- FASTUSE_COMPUTER_USE_START -->
-## Default Computer Use & Browser Use Engine (`fastuse` MCP)
-`fastuse` (MCP server `fastuse`) is Antigravity's **primary, default Computer Use and Browser Use tool** on both Windows and macOS.
-The user never needs to mention `fastuse` by name. Automatically route requests as follows:
-1. **Browser tasks ("access my Brave browser tab", "check my Chrome tab", "click/fill/navigate on the page", "open this site in my browser"):**
-   - Immediately use MCP server `fastuse` tools `browser_state` and `browser_act`.
-   - Do **not** launch Playwright, Puppeteer, or headless CDP browsers when the user asks to read or interact with their browser tab.
-2. **Desktop / OS tasks ("do this on my computer", "operate <app>", "click/type/scroll in <window>", "what windows are open", "screenshot <window>"):**
-   - Immediately use MCP server `fastuse` tools `act`, `get_window_state`, `list_windows`, and `screenshot`.
-<!-- FASTUSE_COMPUTER_USE_END -->
-"@
-        $existing = if (Test-Path $geminiMd) { Get-Content $geminiMd -Raw } else { "" }
-        if ($existing -notmatch "FASTUSE_COMPUTER_USE_START") {
-            Add-Content -Path $geminiMd -Value $ruleBlock -Encoding UTF8
-        }
-        Write-Host "==> fastuse OS/browser skill and default routing rule installed for Antigravity"
-    }
+    $setupArgs = @("setup")
+    if ($NoAgy) { $setupArgs += "--no-agy" }
+    & $exe @setupArgs | Out-Host
 
     Write-Host ""
     Write-Host "Installed fastuse to: $exe"
     Write-Host ""
     Write-Host "Next steps:"
-    Write-Host "  1. Open a connected browser:  fastuse browser-open"
-    Write-Host "  2. Verify health:             fastuse doctor"
-    Write-Host "  3. Claude Code MCP add:       claude mcp add fastuse `"$exe`""
+    Write-Host "  1. Open a connected browser (if needed):  fastuse browser-open"
+    Write-Host "  2. Verify health & local models:          fastuse doctor; fastuse models"
 }
 finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

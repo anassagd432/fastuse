@@ -138,16 +138,17 @@ esac
 
 BIN="$PREFIX_BIN/fastuse"
 "$BIN" --version
-"$BIN" browser-install
-
-if [ "$NO_AGY" != "1" ] && command -v agy >/dev/null 2>&1; then
-  agy mcp add fastuse "$BIN" || true
+if [ "$NO_AGY" = "1" ]; then
+  "$BIN" setup --no-agy
+else
+  "$BIN" setup
 fi
 
 echo ""
 echo "Installed fastuse to: $BIN"
 echo "Next steps:"
-echo "  1. Open a connected browser:  fastuse browser-open"
+echo "  1. Open a connected browser (if needed):  fastuse browser-open"
+echo "  2. Verify health & local models:          fastuse doctor && fastuse models"
 echo "  2. Verify health:             fastuse doctor"
 echo "  3. Claude Code MCP add:       claude mcp add fastuse \"$BIN\""
 "$BIN" doctor || true

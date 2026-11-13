@@ -1,5 +1,6 @@
 //! Tool logic, independent of the operating system. Talks to the OS only through `Platform`.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use base64::Engine;
@@ -15,6 +16,7 @@ pub struct Server {
     browser: Browser,
     /// Bumped on every tree read; element tokens are "s<snap>:<index>" and only the latest is valid.
     snap: u64,
+    last_trees: HashMap<i64, String>,
 }
 
 fn text(s: String) -> Value {
@@ -27,6 +29,12 @@ fn err(s: String) -> Value {
 
 fn arg_i(a: &Value, k: &str) -> Option<i64> {
     a.get(k).and_then(|v| v.as_i64())
+}
+
+fn is_token_str(t: &str) -> bool {
+    t.trim()
+        .split_once(':')
+        .map_or(false, |(sid, _)| sid.starts_with('s') && sid.len() > 1 && sid[1..].chars().all(|c| c.is_ascii_digit()))
 }
 
 fn arg_s<'a>(a: &'a Value, k: &str) -> Option<&'a str> {
@@ -52,7 +60,7 @@ fn image(o: &imaging::Out) -> Value {
 
 impl Server {
     pub fn new(p: Box<dyn Platform>) -> Self {
-        Self { p, shots: Cache::default(), browser: Browser::new(), snap: 0 }
+        Self { p, shots: Cache::default(), browser: Browser::new(), snap: 0, last_trees: HashMap::new() }
     }
 
     pub fn platform_name(&self) -> &'static str {
@@ -98,18 +106,50 @@ impl Server {
     fn state_text(&mut self, w: &WindowInfo, a: &Value) -> Result<String, String> {
         let max_el = arg_i(a, "max_elements").unwrap_or(60) as usize;
         let max_depth = arg_i(a, "max_depth").unwrap_or(12) as usize;
+        let details = a.get("details").and_then(|v| v.as_bool()).unwrap_or(false);
+        let diff = a.get("diff").and_then(|v| v.as_bool()).unwrap_or(false);
+        let filter = arg_s(a, "filter");
         let (r, sid) = self.read(w, max_el, max_depth)?;
+        let compact = crate::platform::format_tree_compact(&r.text, details, filter);
+        let prev = if diff { self.last_trees.get(&w.id).cloned() } else { None };
+        if filter.is_none() {
+            let cache_base = if details {
+                crate::platform::format_tree_compact(&r.text, false, None)
+            } else {
+                compact.clone()
+            };
+            self.last_trees.insert(w.id, cache_base);
+        }
+        let body = match prev {
+            Some(ref p) => {
+                let cmp = if details { crate::platform::format_tree_compact(&r.text, false, filter) } else { compact.clone() };
+                crate::platform::diff_tree(p, &cmp)
+            }
+            None => compact,
+        };
+        if details {
+            return Ok(format!(
+                "window_id={} pid={} elements={} snapshot_id={}{}\ntiming_ms: uia_build={:.1} walk={:.1}\nelement_token for row [N] = {}:N\n\n{}",
+                w.id,
+                w.pid,
+                r.count,
+                sid,
+                if r.truncated { " truncated=true" } else { "" },
+                r.build_us as f64 / 1000.0,
+                r.walk_us as f64 / 1000.0,
+                sid,
+                body
+            ));
+        }
         Ok(format!(
-            "window_id={} pid={} elements={} snapshot_id={}{}\ntiming_ms: uia_build={:.1} walk={:.1}\nelement_token for row [N] = {}:N\n\n{}",
+            "window_id={} pid={} snapshot={} elements={}{} ({:.1}ms)\n{}",
             w.id,
             w.pid,
+            sid,
             r.count,
-            sid,
             if r.truncated { " truncated=true" } else { "" },
-            r.build_us as f64 / 1000.0,
-            r.walk_us as f64 / 1000.0,
-            sid,
-            r.text
+            (r.build_us + r.walk_us) as f64 / 1000.0,
+            body
         ))
     }
 
@@ -127,13 +167,9 @@ impl Server {
         let a = match (arg_s(a, "target"), arg_s(a, "element_token")) {
             (Some(t), None) => {
                 let t = t.trim();
-                let tok = if let Some((sid, _)) = t.split_once(':') {
-                    if sid.starts_with('s') && sid.len() > 1 && sid[1..].chars().all(|c| c.is_ascii_digit()) {
-                        self.tok_index(t)?;
-                        Some(t.to_string())
-                    } else {
-                        None
-                    }
+                let tok = if is_token_str(t) {
+                    self.tok_index(t)?;
+                    Some(t.to_string())
                 } else {
                     None
                 };
@@ -162,10 +198,24 @@ impl Server {
         };
         match name {
             "click" | "double_click" | "right_click" => {
+                let kind = match name {
+                    "double_click" => ClickKind::Double,
+                    "right_click" => ClickKind::Right,
+                    _ => ClickKind::Single,
+                };
                 if let Some(tok) = arg_s(a, "element_token") {
                     let i = self.tok_index(tok)?;
-                    if let Some((cx, cy)) = self.p.element_center(i) {
+                    let center = self.p.element_center(i);
+                    if let Some((cx, cy)) = center {
                         self.p.move_cursor(cx, cy, true);
+                    }
+                    if fg || kind != ClickKind::Single {
+                        if let (Some((cx, cy)), Ok(w)) = (center, self.resolve(a)) {
+                            if cx > -30000 && cy > -30000 {
+                                let how = self.p.click_point(&w, cx - w.rect.left, cy - w.rect.top, kind, fg)?;
+                                return Ok(format!("{name} {tok} via {how}"));
+                            }
+                        }
                     }
                     let how = self.p.click_element(i)?;
                     return Ok(format!("{name} {tok} via {how}"));
@@ -175,11 +225,6 @@ impl Server {
                 };
                 let w = self.resolve(a)?;
                 self.p.move_cursor(w.rect.left + x as i32, w.rect.top + y as i32, true);
-                let kind = match name {
-                    "double_click" => ClickKind::Double,
-                    "right_click" => ClickKind::Right,
-                    _ => ClickKind::Single,
-                };
                 let how = self.p.click_point(&w, x as i32, y as i32, kind, fg)?;
                 Ok(format!("{name} ({x},{y}) via {how}"))
             }
@@ -278,9 +323,19 @@ impl Server {
     fn run_steps(&mut self, a: &Value) -> Result<String, String> {
         let steps = a.get("steps").and_then(|s| s.as_array()).ok_or("steps is required")?;
         let t0 = Instant::now();
-        let tw = self.resolve(a)?;
+        let mut tw = self.resolve(a)?;
         self.show_agent(&tw);
-        if steps.iter().any(|s| s.get("target").is_some()) {
+        if tw.minimized
+            && steps.iter().any(|s| {
+                arg_s(s, "delivery_mode") == Some("foreground") || arg_s(s, "tool") == Some("hotkey")
+            })
+        {
+            let _ = self.p.type_text(Some(&tw), None, "", true);
+            if let Ok(restored) = self.resolve(&json!({"window_id": tw.id})) {
+                tw = restored;
+            }
+        }
+        if steps.iter().any(|s| arg_s(s, "target").map_or(false, |t| !is_token_str(t))) {
             self.read(&tw, 250, 25)?;
         }
         let mut log = String::new();
@@ -311,6 +366,13 @@ impl Server {
                 Some(o) if o.is_object() => o.clone(),
                 _ => json!({}),
             };
+            for k in ["details", "diff", "filter", "max_elements"] {
+                if oa.get(k).is_none() {
+                    if let Some(v) = a.get(k) {
+                        oa[k] = v.clone();
+                    }
+                }
+            }
             if oa.get("max_elements").is_none() {
                 oa["max_elements"] = json!(35);
             }
@@ -476,6 +538,11 @@ impl Server {
                 Err(e) => err(e),
             },
             "act" | "run_steps" => match self.run_steps(a) {
+                Ok(s) => text(s),
+                Err(e) => err(e),
+            },
+            #[cfg(feature = "runner")]
+            "delegate" => match crate::runner::delegate(self, a) {
                 Ok(s) => text(s),
                 Err(e) => err(e),
             },

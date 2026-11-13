@@ -242,6 +242,106 @@ pub fn tree_row(out: &mut String, depth: usize, idx: Option<usize>, role: &str, 
     out.push('\n');
 }
 
+fn strip_trailing_rect(s: &str) -> &str {
+    if let Some(pos) = s.rfind(" @(") {
+        if s.ends_with(')') {
+            let inner = &s[pos + 3..s.len() - 1];
+            if !inner.is_empty() && inner.bytes().all(|b| b.is_ascii_digit() || b == b',' || b == b'-') {
+                return &s[..pos];
+            }
+        }
+    }
+    s
+}
+
+fn compact_line(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let indent = if line.len() > trimmed.len() { "  " } else { "" };
+    let no_rect = strip_trailing_rect(trimmed);
+    let body = if no_rect.contains('"') {
+        if let Some(pos) = no_rect.rfind(" id=") {
+            let after_quote = no_rect.rfind('"').unwrap_or(0);
+            if pos > after_quote {
+                &no_rect[..pos]
+            } else {
+                no_rect
+            }
+        } else {
+            no_rect
+        }
+    } else {
+        no_rect
+    };
+    format!("{indent}{body}")
+}
+
+fn diff_key(line: &str) -> &str {
+    let t = line.trim_start().strip_prefix("- ").unwrap_or(line.trim_start());
+    if let Some(rest) = t.strip_prefix('[') {
+        if let Some(end) = rest.find("] ") {
+            return &rest[end + 2..];
+        }
+    }
+    t
+}
+
+/// Shrinks UI/DOM tree output for LLM token efficiency (omits coordinates & redundant IDs unless
+/// `details` is true) and optionally filters rows by case-insensitive substring.
+pub fn format_tree_compact(text: &str, details: bool, filter: Option<&str>) -> String {
+    let q = filter.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+    let mut out = String::with_capacity(text.len() / 2 + 32);
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(ref needle) = q {
+            if !line.to_ascii_lowercase().contains(needle) {
+                continue;
+            }
+        }
+        if details {
+            out.push_str(line);
+        } else {
+            out.push_str(&compact_line(line));
+        }
+        out.push('\n');
+    }
+    if out.is_empty() {
+        if let Some(needle) = q {
+            return format!("(no elements match \"{needle}\")\n");
+        }
+    }
+    out
+}
+
+/// Returns only added or changed tree lines compared to `prev`, keeping live `[N]` indices.
+pub fn diff_tree(prev: &str, cur: &str) -> String {
+    use std::collections::HashSet;
+    let prev_keys: HashSet<&str> = prev.lines().filter(|l| !l.is_empty()).map(diff_key).collect();
+    let mut changed = Vec::new();
+    let mut unchanged = 0usize;
+    for line in cur.lines().filter(|l| !l.is_empty()) {
+        if prev_keys.contains(diff_key(line)) {
+            unchanged += 1;
+        } else {
+            changed.push(line);
+        }
+    }
+    if changed.is_empty() {
+        return format!("(no UI change; {unchanged} unchanged)\n");
+    }
+    let mut out = if unchanged > 0 {
+        format!("({unchanged} unchanged omitted)\n")
+    } else {
+        String::new()
+    };
+    for l in changed {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(windows)]
 fn default() -> Result<Box<dyn Platform>, String> {
     Ok(Box::new(win::WinPlatform::new()?))
@@ -317,5 +417,24 @@ mod tests {
         let mut s = String::new();
         tree_row(&mut s, 0, None, "Edit", "input", "hi", "", None);
         assert_eq!(s, "- Edit \"input\" value=\"hi\"\n");
+    }
+
+    #[test]
+    fn compact_and_diff_shrink_tree_cleanly() {
+        let raw = "      - [0] Button \"Save\" id=btn-save @(10,20,80,30)\n  - [1] Button id=close @(90,20,24,24)\n";
+        assert_eq!(
+            format_tree_compact(raw, false, None),
+            "  - [0] Button \"Save\"\n  - [1] Button id=close\n"
+        );
+        assert_eq!(
+            format_tree_compact(raw, false, Some("save")),
+            "  - [0] Button \"Save\"\n"
+        );
+        let prev = "  - [0] Button \"Save\"\n  - [1] Edit \"Name\" value=\"old\"\n";
+        let cur = "  - [0] Button \"Save\"\n  - [1] Edit \"Name\" value=\"new\"\n";
+        assert_eq!(
+            diff_tree(prev, cur),
+            "(1 unchanged omitted)\n  - [1] Edit \"Name\" value=\"new\"\n"
+        );
     }
 }

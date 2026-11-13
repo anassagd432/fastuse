@@ -35,10 +35,13 @@ mod win {
     use std::os::windows::io::{FromRawHandle, RawHandle};
     use std::sync::Mutex;
 
-    use windows::core::{w, PCWSTR};
-    use windows::Win32::Foundation::{GetLastError, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL, LocalFree};
-    use windows::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
-    use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+    use windows::core::{PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL, LocalFree};
+    use windows::Win32::Security::Authorization::{
+        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows::Win32::Security::{GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
     use windows::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
@@ -76,13 +79,47 @@ mod win {
         Ok(h.0 as isize)
     }
 
+    fn current_user_sid() -> Option<String> {
+        unsafe {
+            let mut tok = HANDLE::default();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok).is_err() {
+                return None;
+            }
+            let mut needed = 0u32;
+            let _ = GetTokenInformation(tok, TokenUser, None, 0, &mut needed);
+            if needed == 0 {
+                let _ = CloseHandle(tok);
+                return None;
+            }
+            let mut buf = vec![0u8; needed as usize];
+            let ok = GetTokenInformation(tok, TokenUser, Some(buf.as_mut_ptr() as *mut _), needed, &mut needed).is_ok();
+            let _ = CloseHandle(tok);
+            if !ok {
+                return None;
+            }
+            let tu = &*(buf.as_ptr() as *const TOKEN_USER);
+            let mut sid_w = PWSTR::null();
+            if ConvertSidToStringSidW(tu.User.Sid, &mut sid_w).is_err() || sid_w.is_null() {
+                return None;
+            }
+            let s = sid_w.to_string().ok();
+            let _ = LocalFree(Some(HLOCAL(sid_w.0 as *mut std::ffi::c_void)));
+            s
+        }
+    }
+
     impl Listener {
         pub fn bind(name: &str) -> io::Result<Listener> {
             let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
             let mut psd = PSECURITY_DESCRIPTOR::default();
-            // protected DACL: full access for the owner (this user) and for SYSTEM, nobody else
+            // Full access for owner, explicit user SID (covers UAC/sandbox elevation mismatch), and SYSTEM
+            let sddl = match current_user_sid() {
+                Some(sid) => format!("D:P(A;;GA;;;OW)(A;;GA;;;{sid})(A;;GA;;;SY)"),
+                None => "D:P(A;;GA;;;OW)(A;;GA;;;SY)".to_string(),
+            };
+            let sddl_w: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
             unsafe {
-                ConvertStringSecurityDescriptorToSecurityDescriptorW(w!("D:P(A;;GA;;;OW)(A;;GA;;;SY)"), SDDL_REVISION_1, &mut psd, None)
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(sddl_w.as_ptr()), SDDL_REVISION_1, &mut psd, None)
                     .map_err(|e| io::Error::other(e.to_string()))?;
             }
             let sd = psd.0 as isize;

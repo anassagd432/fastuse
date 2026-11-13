@@ -19,6 +19,10 @@ fn h(hwnd: isize) -> HWND {
 /// Bring `top` to the foreground and confirm it. Foreground input must never land in another window.
 pub fn raise(top: isize) -> bool {
     unsafe {
+        if IsIconic(h(top)).as_bool() {
+            let _ = ShowWindow(h(top), SW_RESTORE);
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
         if GetForegroundWindow() == h(top) {
             return true;
         }
