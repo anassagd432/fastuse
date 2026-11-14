@@ -179,11 +179,26 @@ impl Server {
                         let i = match self.p.resolve_target(t) {
                             Ok(i) => i,
                             Err(_) => {
-                                // Step N-1 may have opened a menu/dialog or mutated the UI: re-read once and retry
-                                if let Ok(w) = self.resolve(a) {
-                                    let _ = self.read(&w, 250, 25);
+                                // Step N-1 may have opened a menu/dialog or mutated the UI: auto-wait & poll UIA
+                                let is_opt = a.get("optional").and_then(|v| v.as_bool()).unwrap_or(false)
+                                    || a.get("if_present").and_then(|v| v.as_bool()).unwrap_or(false);
+                                let limit = arg_i(a, "timeout_ms")
+                                    .or_else(|| arg_i(a, "timeout"))
+                                    .unwrap_or(if is_opt { 600 } else { 2000 })
+                                    .clamp(100, 10000) as u64;
+                                let wait_t0 = Instant::now();
+                                loop {
+                                    if let Ok(w) = self.resolve(a) {
+                                        let _ = self.read(&w, 250, 25);
+                                    }
+                                    if let Ok(found) = self.p.resolve_target(t) {
+                                        break found;
+                                    }
+                                    if wait_t0.elapsed().as_millis() as u64 >= limit {
+                                        break self.p.resolve_target(t)?;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(120));
                                 }
-                                self.p.resolve_target(t)?
                             }
                         };
                         format!("s{:08}:{}", self.snap, i)
@@ -311,9 +326,6 @@ impl Server {
                 }
                 let ms = arg_i(a, "ms").unwrap_or(500).clamp(0, 10000) as u64;
                 std::thread::sleep(std::time::Duration::from_millis(ms));
-                if let Ok(w) = self.resolve(a) {
-                    let _ = self.read(&w, 250, 25);
-                }
                 Ok(format!("waited {ms} ms"))
             }
             _ => Err(format!("unknown tool {name}")),
@@ -321,12 +333,13 @@ impl Server {
     }
 
     fn run_steps(&mut self, a: &Value) -> Result<String, String> {
-        let steps = a.get("steps").and_then(|s| s.as_array()).ok_or("steps is required")?;
+        let pb = crate::playbook::resolve_playbook(a)?;
         let t0 = Instant::now();
         let mut tw = self.resolve(a)?;
         self.show_agent(&tw);
+        let all_steps_iter = pb.batches.iter().flat_map(|b| b.iter());
         if tw.minimized
-            && steps.iter().any(|s| {
+            && all_steps_iter.clone().any(|s| {
                 arg_s(s, "delivery_mode") == Some("foreground") || arg_s(s, "tool") == Some("hotkey")
             })
         {
@@ -335,32 +348,78 @@ impl Server {
                 tw = restored;
             }
         }
-        if steps.iter().any(|s| arg_s(s, "target").map_or(false, |t| !is_token_str(t))) {
+        if pb
+            .batches
+            .iter()
+            .flat_map(|b| b.iter())
+            .any(|s| arg_s(s, "target").map_or(false, |t| !is_token_str(t)))
+        {
             self.read(&tw, 250, 25)?;
         }
         let mut log = String::new();
-        let mut failed = false;
-        for (i, s) in steps.iter().enumerate() {
-            let tool = arg_s(s, "tool").ok_or_else(|| format!("step {} has no tool", i + 1))?;
-            let mut args = s.clone();
-            if let Some(o) = args.as_object_mut() {
-                o.remove("tool");
-                if let Some(Value::Object(inner)) = o.remove("args") {
-                    o.extend(inner);
+        if let Some(ref m) = pb.macro_note {
+            log += &format!("macro: {m}\n");
+        }
+        let total_batches = pb.batches.len();
+        let is_multi = total_batches > 1;
+        let mut any_failed = false;
+        let mut items_ok = 0usize;
+        let mut total_steps = 0usize;
+
+        for (b_idx, steps) in pb.batches.iter().enumerate() {
+            total_steps += steps.len();
+            let mut item_failed = false;
+            if is_multi {
+                let label = pb.item_labels.get(b_idx).map(|s| s.as_str()).unwrap_or("");
+                log += &format!("[item {}/{} ({})]\n", b_idx + 1, total_batches, label);
+            }
+            for (i, s) in steps.iter().enumerate() {
+                let tool = arg_s(s, "tool").ok_or_else(|| format!("step {} has no tool", i + 1))?;
+                let is_opt = s.get("optional").and_then(|v| v.as_bool()).unwrap_or(false)
+                    || s.get("if_present").and_then(|v| v.as_bool()).unwrap_or(false);
+                let mut args = s.clone();
+                if let Some(o) = args.as_object_mut() {
+                    o.remove("tool");
+                    if let Some(Value::Object(inner)) = o.remove("args") {
+                        o.extend(inner);
+                    }
+                }
+                args["window_id"] = json!(tw.id);
+                let indent = if is_multi { "  " } else { "" };
+                match self.act(tool, &args) {
+                    Ok(m) => log += &format!("{indent}{}. ok: {m}\n", i + 1),
+                    Err(e) if is_opt => {
+                        log += &format!("{indent}{}. ok (skipped optional {tool}): {e}\n", i + 1);
+                    }
+                    Err(e) => {
+                        log += &format!("{indent}{}. FAILED {tool}: {e}\n", i + 1);
+                        item_failed = true;
+                        any_failed = true;
+                        if !pb.continue_on_error {
+                            break;
+                        }
+                    }
                 }
             }
-            args["window_id"] = json!(tw.id);
-            match self.act(tool, &args) {
-                Ok(m) => log += &format!("{}. ok: {m}\n", i + 1),
-                Err(e) => {
-                    log += &format!("{}. FAILED {tool}: {e}\n", i + 1);
-                    failed = true;
-                    break;
-                }
+            if !item_failed {
+                items_ok += 1;
+            } else if !pb.continue_on_error {
+                break;
             }
         }
         let steps_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        let mut out = format!("run_steps: {} step(s), {steps_ms:.1} ms{}\n{log}", steps.len(), if failed { " (stopped at failure)" } else { "" });
+        let mut out = if is_multi {
+            format!(
+                "run_steps playbook: {}/{} item(s) succeeded ({} total steps), {steps_ms:.1} ms\n{log}",
+                items_ok, total_batches, total_steps
+            )
+        } else {
+            format!(
+                "run_steps: {} step(s), {steps_ms:.1} ms{}\n{log}",
+                total_steps,
+                if any_failed { " (stopped at failure)" } else { "" }
+            )
+        };
         if !matches!(a.get("observe"), Some(Value::Bool(false))) {
             let mut oa = match a.get("observe") {
                 Some(o) if o.is_object() => o.clone(),
@@ -382,7 +441,7 @@ impl Server {
             out += "\n";
             out += &self.state_text(&tw, &oa)?;
         }
-        if failed {
+        if any_failed && (!is_multi || items_ok == 0) {
             Err(out)
         } else {
             Ok(out)

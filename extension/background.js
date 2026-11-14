@@ -206,7 +206,7 @@ async function currentTab() {
 async function read(tab, p) {
   let res;
   try {
-    res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readPage, args: [{ max: p.max, text: p.text, snap: p.snap_next || p.snap || '' }] });
+    res = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readPage, args: [{ max: p.max, text: p.text, query: p.query || '', snap: p.snap_next || p.snap || '' }] });
   } catch (e) {
     throw new Error('cannot read tab ' + tab.id + ': ' + (e && e.message ? e.message : e));
   }
@@ -365,6 +365,12 @@ async function actRun(p) {
 
 const METHODS = {
   ping: async () => ({ pong: true }),
+  'ext.reload': async () => {
+    setTimeout(() => {
+      try { chrome.runtime.reload(); } catch (e) { /* ignore */ }
+    }, 60);
+    return { reloaded: true };
+  },
   'tabs.list': listTabs,
   'page.state': pageState,
   'act.run': actRun,

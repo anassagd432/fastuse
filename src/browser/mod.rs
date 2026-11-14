@@ -331,9 +331,12 @@ impl Browser {
         if let Some(n) = a.get("max_elements") {
             params["max"] = n.clone();
         }
+        if let Some(q) = a.get("filter").or_else(|| a.get("query")) {
+            params["query"] = q.clone();
+        }
         let details = a.get("details").and_then(|v| v.as_bool()).unwrap_or(false);
         let diff = a.get("diff").and_then(|v| v.as_bool()).unwrap_or(false);
-        let filter = a.get("filter").and_then(|v| v.as_str());
+        let filter = a.get("filter").or_else(|| a.get("query")).and_then(|v| v.as_str());
         let (st, auto_note) = call_auto("page.state", params, Duration::from_secs(30))?;
         let tabs = match st.get("tabs") {
             Some(t) if t.is_object() => t.clone(),
@@ -365,86 +368,162 @@ impl Browser {
         Ok(format!("{prefix}{}", format_state_compact(Some(&tabs), &st, &sid, &body)))
     }
 
-    /// `browser_act`: run steps in the agent's own tabs, then return the compact new page state.
+    /// `browser_act`: run steps (or multi-item playbooks / saved macros) in the agent's tabs, then return compact state.
     pub fn act(&mut self, a: &Value) -> Result<String, String> {
-        let steps = a.get("steps").and_then(|s| s.as_array()).ok_or("steps is required")?;
+        let pb = crate::playbook::resolve_playbook(a)?;
         let t0 = Instant::now();
-        let mut params = json!({
-            "steps": steps,
-            "snap": format!("s{:08}", self.snap),
-            "snap_next": format!("s{:08}", self.snap + 1),
-        });
-        for k in ["tab", "observe", "text"] {
-            if let Some(v) = a.get(k) {
-                params[k] = v.clone();
-            }
-        }
-        if let Some(n) = a.get("max_elements") {
-            params["max"] = n.clone();
-        }
         let details = a.get("details").and_then(|v| v.as_bool()).unwrap_or(false);
         let diff = a.get("diff").and_then(|v| v.as_bool()).unwrap_or(false);
-        let filter = a.get("filter").and_then(|v| v.as_str());
-        let has_tab_step = steps.iter().any(|s| {
-            matches!(
-                s.get("tool").and_then(|v| v.as_str()),
-                Some("new_tab" | "switch_tab" | "close_tab")
-            )
-        });
+        let filter = a.get("filter").or_else(|| a.get("query")).and_then(|v| v.as_str());
+        let want_observe = a.get("observe").and_then(|v| v.as_bool()).unwrap_or(true);
+        let total_batches = pb.batches.len();
+        let is_multi = total_batches > 1;
 
-        let (r, auto_note) = call_auto("act.run", params, Duration::from_secs(120))?;
-        let failed = r.get("failed").and_then(|f| f.as_bool()).unwrap_or(false);
-        let mut out = format!(
-            "browser_act: {} step(s), {:.0} ms{}\n",
-            steps.len(),
-            t0.elapsed().as_secs_f64() * 1000.0,
-            if failed { " (stopped at failure)" } else { "" }
-        );
-        if let Some(n) = auto_note {
+        let mut all_logs: Vec<String> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
+        let mut auto_note_once: Option<String> = None;
+        let mut last_result: Option<Value> = None;
+        let mut any_failed = false;
+        let mut items_ok = 0usize;
+        let mut total_steps = 0usize;
+        let mut has_tab_step = false;
+
+        for (b_idx, steps) in pb.batches.iter().enumerate() {
+            total_steps += steps.len();
+            if steps.iter().any(|s| {
+                matches!(
+                    s.get("tool").and_then(|v| v.as_str()),
+                    Some("new_tab" | "switch_tab" | "close_tab")
+                )
+            }) {
+                has_tab_step = true;
+            }
+            let is_last = b_idx + 1 == total_batches;
+            let observe_this = if is_last { want_observe } else { false };
+            let mut params = json!({
+                "steps": steps,
+                "snap": format!("s{:08}", self.snap),
+                "snap_next": format!("s{:08}", self.snap + 1),
+                "observe": observe_this,
+            });
+            for k in ["tab", "text"] {
+                if let Some(v) = a.get(k) {
+                    params[k] = v.clone();
+                }
+            }
+            if let Some(n) = a.get("max_elements") {
+                params["max"] = n.clone();
+            }
+            if let Some(q) = a.get("filter").or_else(|| a.get("query")) {
+                params["query"] = q.clone();
+            }
+
+            let (r, auto_note) = call_auto("act.run", params, Duration::from_secs(120))?;
+            if auto_note_once.is_none() {
+                auto_note_once = auto_note;
+            }
+            let failed = r.get("failed").and_then(|f| f.as_bool()).unwrap_or(false);
+            if is_multi {
+                let label = pb.item_labels.get(b_idx).map(|s| s.as_str()).unwrap_or("");
+                all_logs.push(format!(
+                    "[item {}/{} ({})] {}",
+                    b_idx + 1,
+                    total_batches,
+                    label,
+                    if failed { "FAILED" } else { "ok" }
+                ));
+                for l in r.get("log").and_then(|l| l.as_array()).into_iter().flatten() {
+                    if let Some(s) = l.as_str() {
+                        all_logs.push(format!("  {s}"));
+                    }
+                }
+            } else {
+                for l in r.get("log").and_then(|l| l.as_array()).into_iter().flatten() {
+                    if let Some(s) = l.as_str() {
+                        all_logs.push(s.to_string());
+                    }
+                }
+            }
+            if let Some(n) = r.get("note").and_then(|n| n.as_str()) {
+                notes.push(n.to_string());
+            }
+            last_result = Some(r);
+            if failed {
+                any_failed = true;
+                if !pb.continue_on_error {
+                    break;
+                }
+            } else {
+                items_ok += 1;
+            }
+        }
+
+        let mut out = if is_multi {
+            format!(
+                "browser_act playbook: {}/{} item(s) succeeded ({} total steps), {:.0} ms\n",
+                items_ok,
+                total_batches,
+                total_steps,
+                t0.elapsed().as_secs_f64() * 1000.0
+            )
+        } else {
+            format!(
+                "browser_act: {} step(s), {:.0} ms{}\n",
+                total_steps,
+                t0.elapsed().as_secs_f64() * 1000.0,
+                if any_failed { " (stopped at failure)" } else { "" }
+            )
+        };
+        if let Some(m) = pb.macro_note {
+            out += &format!("macro: {m}\n");
+        }
+        if let Some(n) = auto_note_once {
             out += &format!("{n}\n");
         }
-        for l in r.get("log").and_then(|l| l.as_array()).into_iter().flatten() {
-            out += l.as_str().unwrap_or("");
+        for l in all_logs {
+            out += &l;
             out.push('\n');
         }
-        if let Some(n) = r.get("note").and_then(|n| n.as_str()) {
+        for n in notes {
             out += &format!("note: {n}\n");
         }
-        if let Some(st) = r.get("state") {
-            self.snap += 1;
-            let sid = format!("s{:08}", self.snap);
-            let tabs = if details || has_tab_step {
-                match r.get("tabs").or_else(|| st.get("tabs")) {
-                    Some(t) if t.is_object() => Some(t.clone()),
-                    _ => call("tabs.list", json!({}), Duration::from_secs(10)).ok(),
-                }
-            } else {
-                None
-            };
-            let st_view = json!({"tab": st["tab"], "page": st["page"], "browser": r["browser"]});
-            let tab_id = st["tab"]["id"].as_i64().unwrap_or(0);
-            let raw = st["page"]["text"].as_str().unwrap_or("");
-            let compact = crate::platform::format_tree_compact(raw, details, filter);
-            let prev = if diff { self.last_trees.get(&tab_id).cloned() } else { None };
-            if filter.is_none() {
-                self.last_trees.insert(tab_id, compact.clone());
-            }
-            out += "\n";
-            if details && filter.is_none() && !diff {
-                if let Some(ref t) = tabs {
-                    out += &format_state(t, &st_view, &sid);
+        if let Some(ref r) = last_result {
+            if let Some(st) = r.get("state") {
+                self.snap += 1;
+                let sid = format!("s{:08}", self.snap);
+                let tabs = if details || has_tab_step {
+                    match r.get("tabs").or_else(|| st.get("tabs")) {
+                        Some(t) if t.is_object() => Some(t.clone()),
+                        _ => call("tabs.list", json!({}), Duration::from_secs(10)).ok(),
+                    }
                 } else {
-                    out += &format_state_compact(None, &st_view, &sid, &compact);
-                }
-            } else {
-                let body = match prev {
-                    Some(ref p) => crate::platform::diff_tree(p, &compact),
-                    None => compact,
+                    None
                 };
-                out += &format_state_compact(tabs.as_ref(), &st_view, &sid, &body);
+                let st_view = json!({"tab": st["tab"], "page": st["page"], "browser": r["browser"]});
+                let tab_id = st["tab"]["id"].as_i64().unwrap_or(0);
+                let raw = st["page"]["text"].as_str().unwrap_or("");
+                let compact = crate::platform::format_tree_compact(raw, details, filter);
+                let prev = if diff { self.last_trees.get(&tab_id).cloned() } else { None };
+                if filter.is_none() {
+                    self.last_trees.insert(tab_id, compact.clone());
+                }
+                out += "\n";
+                if details && filter.is_none() && !diff {
+                    if let Some(ref t) = tabs {
+                        out += &format_state(t, &st_view, &sid);
+                    } else {
+                        out += &format_state_compact(None, &st_view, &sid, &compact);
+                    }
+                } else {
+                    let body = match prev {
+                        Some(ref p) => crate::platform::diff_tree(p, &compact),
+                        None => compact,
+                    };
+                    out += &format_state_compact(tabs.as_ref(), &st_view, &sid, &body);
+                }
             }
         }
-        if failed {
+        if any_failed && (!is_multi || items_ok == 0) {
             Err(out)
         } else {
             Ok(out)

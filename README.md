@@ -25,8 +25,9 @@ Traditional computer-use tools hijack your real mouse cursor, steal window focus
 `fastuse` fixes the architecture:
 
 * **Zero Cursor Stealing:** Dispatches clicks, typing, and UI tree reads in the background via native OS APIs (`UI Automation` on Windows, `AXUIElement` + `CoreGraphics` on macOS). Keep working undisturbed while your agent operates windows behind the scenes.
-* **Your Real Browser, Logged In:** Connects directly to **Brave, Chrome, or Edge** over a Chrome Native Messaging Host (`fastuse browser-open`), keeping your logins, cookies, and active tabs intact — with an embedded extension inside the single binary.
-* **Single-Turn Batches (`act` / `browser_act`):** Executes full sequences (`set_value` + `click` + `wait` + `observe`) in one MCP call (~50ms native execution vs. multi-second screenshot loops).
+* **Zero Screenshots — Instant Semantic DOM & UIA Map (`<15–40ms`):** Reads live web pages (prioritizing dialogs, inputs, `<main>`, and `<article>` posts/tweets/messages) and native OS windows directly into a compact semantic map. `screenshot` is excluded from default MCP tools so frontier models never waste 4–8 seconds and thousands of vision tokens analyzing images.
+* **Think Once, Execute Like Muscle Memory (`steps` + `items` + Macros):** Every step in `browser_act` and `act` auto-polls the live DOM/UIA (`60ms` interval, up to `3.5s`) for modals, drawers, or inputs to mount — so the agent chains an entire multi-screen flow in **one call** without pausing to think between steps. For repetitive workflows (cold outreach DMs, multi-query search, lead scraping), pass `items: [...]` + `{{var}}` templates (or replay a saved macro via `macro_name`) to execute 10–50 items in a single turn with **zero LLM turns in between**.
+* **Your Real Browser, Logged In:** Connects directly to **Brave, Chrome, or Edge** over a Chrome Native Messaging Host (`fastuse browser-open`), keeping your logins, cookies, and active tabs intact — with an embedded extension inside the single binary that hot-reloads automatically on `fastuse setup`.
 * **Visible Agent Overlay:** An independent glowing blue cursor and screen-edge aura track every automated action cleanly — while hidden from OS screenshots via `WDA_EXCLUDEFROMCAPTURE`.
 
 ---
@@ -138,14 +139,15 @@ Browser use:
 
 ## 🛠️ Tool Catalog
 
-### 1. Browser Automation (`browser_act`, `browser_state`)
-Operates inside your Chromium browser via the embedded MV3 extension + native messaging bridge:
+### 1. Browser Automation & Zero-Think Playbooks (`browser_act`, `browser_state`)
+Operates inside your Chromium browser via the embedded MV3 extension + native messaging bridge — **zero screenshots, zero LLM pauses between steps**:
 
 | Tool | Description |
 |---|---|
-| `browser_act` | Execute complete web flows in one call (`navigate`, `new_tab`, `switch_tab`, `close_tab`, `back`, `forward`, `reload`, `click`, `double_click`, `right_click`, `hover`, `fill`, `type`, `select`, `press`, `scroll`, `wait`). Supports `observe: false` (zero tree tokens after final step), `diff: true` (delta-only updates), and `filter`. |
-| `browser_state` | Reads visible tabs as a compact viewport-prioritized tree (45 rows default, zero coordinates/IDs unless `details: true`). |
+| `browser_act` | Execute complete web flows or multi-item playbooks in **one call** (`navigate`, `new_tab`, `switch_tab`, `close_tab`, `back`, `forward`, `reload`, `click`, `double_click`, `right_click`, `hover`, `fill`, `type`, `select`, `press`, `scroll`, `wait`, `extract`). Auto-waits up to 3.5s per step for modals/inputs to mount on the live DOM. Supports `items: [...]` + `{{var}}` batch templates, `macro_save` / `macro_name`, `optional: true` steps, `observe: false`, `diff: true`, and `filter`. |
+| `browser_state` | Reads visible tabs as a compact semantic DOM map (<15ms, zero vision tokens; dialogs, inputs, and `<main>` prioritized automatically). |
 
+**Single-Turn Blind Flow (Live-DOM Auto-Wait across pages & modals):**
 ```json
 {
   "steps": [
@@ -157,15 +159,46 @@ Operates inside your Chromium browser via the embedded MV3 extension + native me
 }
 ```
 
-### 2. Desktop Automation (`act`, `get_window_state`, `list_windows`, `screenshot`)
+**Multi-Item Muscle-Memory Playbook (Think once upfront, execute 10 items with 0 LLM turns between items):**
+```json
+{
+  "macro_save": "send_cold_dm",
+  "items": [
+    { "url": "https://x.com/lead1", "dm": "Hey! Saw your post on..." },
+    { "url": "https://x.com/lead2", "dm": "Quick question about..." }
+  ],
+  "steps": [
+    { "tool": "navigate", "url": "{{url}}" },
+    { "tool": "click", "target": "Button:Message" },
+    { "tool": "fill", "target": "Start a new message", "text": "{{dm}}" },
+    { "tool": "press", "key": "Enter" }
+  ],
+  "observe": false
+}
+```
+
+**Replay a Saved Macro on a New Batch (0 planning overhead):**
+```json
+{
+  "macro_name": "send_cold_dm",
+  "items": [
+    { "url": "https://x.com/lead3", "dm": "Hey! Quick question..." },
+    { "url": "https://x.com/lead4", "dm": "Loved your latest release..." }
+  ],
+  "observe": false
+}
+```
+
+### 2. Desktop Automation (`act`, `get_window_state`, `list_windows`)
 Operates any Win32, WPF, WinUI, Cocoa, AppKit, or Electron desktop application:
 
 | Tool | Description |
 |---|---|
-| `act` | Execute an end-to-end desktop batch in one turn (`click`, `double_click`, `right_click`, `set_value`, `type_text`, `press_key`, `hotkey`, `scroll`, `wait`). Supports `observe: false`, `diff: true`, and `filter`. |
-| `get_window_state` | Reads an app's UI hierarchy cleanly (`max_elements`, `filter`, `diff`, `details`). |
+| `act` | Execute an end-to-end desktop workflow or multi-item playbook in one turn (`click`, `double_click`, `right_click`, `set_value`, `type_text`, `press_key`, `hotkey`, `scroll`, `wait`). Auto-waits up to 2s for menus/dialogs to open. Supports `items: [...]` + `{{var}}`, `macro_save` / `macro_name`, `optional: true`, `observe: false`, `diff: true`, and `filter`. |
+| `get_window_state` | Reads an app's UI hierarchy cleanly (`max_elements`, `filter`, `diff`, `details`) in `< 20 ms` with zero vision tokens. |
 | `list_windows` | Lists all visible top-level windows with title, PID, process name, and bounds in `< 1 ms`. |
-| `screenshot` | Background window capture (`PrintWindow` / `BitBlt`) or desktop capture, cropped and JPEG-encoded (used only as fallback for canvas/media views). |
+
+*(Note: Visual `screenshot` is hidden from default MCP tools so agents stay 100% on the fast semantic path; set `FASTUSE_SCREENSHOT=1` only if you need raw pixel capture for 3D canvas/games.)*
 
 ```json
 {

@@ -6,9 +6,11 @@
 
 export function readPage(opts) {
   const t0 = performance.now();
-  const max = Math.max(10, Math.min(opts.max || 45, 1000));
-  const scanCap = Math.min(Math.max(max * 10, 600), 2500);
+  const max = Math.max(10, Math.min(opts.max || 80, 1000));
+  const scanCap = Math.min(Math.max(max * 12, 800), 3000);
   const withText = !!opts.text;
+  const queryRaw = (opts.query || opts.filter || '').trim().toLowerCase();
+  const queryTerms = queryRaw ? queryRaw.split('|').map((s) => s.trim()).filter(Boolean) : [];
   const refs = [];
   const meta = [];
   const rows = [];
@@ -136,20 +138,26 @@ export function readPage(opts) {
     return '';
   }
 
-  function walk(node, depth, ox, oy) {
+  function walk(node, depth, ox, oy, region) {
     for (let el = node.firstElementChild; el; el = el.nextElementSibling) {
       if (items.length >= scanCap) {
         truncated = true;
         return;
       }
-      visit(el, depth, ox, oy);
+      visit(el, depth, ox, oy, region);
     }
   }
 
-  function visit(el, depth, ox, oy) {
+  function visit(el, depth, ox, oy, region) {
     const tag = el.tagName;
     if (SKIP.has(tag) || el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') return;
     if (!visible(el)) return;
+
+    let reg = region;
+    const rawRole = (el.getAttribute('role') || '').toLowerCase();
+    if (tag === 'DIALOG' || rawRole === 'dialog' || rawRole === 'alertdialog') reg = 0;
+    else if (tag === 'MAIN' || rawRole === 'main' || tag === 'ARTICLE' || rawRole === 'article') reg = 1;
+    else if (reg !== 0 && (tag === 'ASIDE' || tag === 'NAV' || rawRole === 'navigation' || rawRole === 'complementary')) reg = 2;
 
     const role = roleOf(el);
     if (role) {
@@ -164,10 +172,12 @@ export function readPage(opts) {
         else if (exp === 'false') flagList.push('collapsed');
         const flags = flagList.join(' ');
         const id = el.id || el.getAttribute('data-testid') || el.getAttribute('name') || '';
+        const isInput = role === 'textbox' || role === 'searchbox' || role === 'combobox';
         items.push({
           act: true,
           el,
           inView: rectInView({ left: r.left + ox, top: r.top + oy, right: r.right + ox, bottom: r.bottom + oy }),
+          prio: reg === 0 || isInput ? 0 : reg,
           depth,
           role: ROLE_LABEL[role] || role,
           name,
@@ -185,27 +195,29 @@ export function readPage(opts) {
       const t = cut(txt(el.textContent), 100);
       if (t) {
         const r = el.getBoundingClientRect();
-        items.push({ act: false, inView: rectInView(r), depth, role: 'Heading[' + tag[1] + ']', name: t, value: '', id: '', rect: null, flags: '' });
+        items.push({ act: false, inView: rectInView(r), prio: reg, depth, role: 'Heading[' + tag[1] + ']', name: t, value: '', id: '', rect: null, flags: '' });
       }
-    } else if (LANDMARK[tag] !== undefined || el.getAttribute('role') === 'dialog') {
-      const label = LANDMARK[tag] || (el.getAttribute('role') === 'dialog' ? 'Dialog' : '');
+    } else if (LANDMARK[tag] !== undefined || rawRole === 'dialog' || rawRole === 'article') {
+      const label = LANDMARK[tag] || (rawRole === 'dialog' ? 'Dialog' : rawRole === 'article' ? 'Article' : '');
       const aria = el.getAttribute('aria-label') || '';
+      const isArticle = tag === 'ARTICLE' || rawRole === 'article';
+      const summary = isArticle ? cut(txt(aria || el.innerText || el.textContent), 180) : cut(txt(aria), 60);
       if (label && (tag !== 'SECTION' || aria)) {
         const r = el.getBoundingClientRect();
-        items.push({ act: false, inView: rectInView(r), depth, role: label, name: cut(txt(aria), 60), value: '', id: '', rect: null, flags: '' });
+        items.push({ act: false, inView: rectInView(r), prio: isArticle ? 1 : reg, depth, role: label, name: summary, value: '', id: '', rect: null, flags: '' });
         d = depth + 1;
       }
     } else if (withText && TEXT_TAGS.has(tag)) {
       const t = cut(txt(el.textContent), 120);
       if (t) {
         const r = el.getBoundingClientRect();
-        items.push({ act: false, inView: rectInView(r), depth, role: 'Text', name: t, value: '', id: '', rect: null, flags: '' });
+        items.push({ act: false, inView: rectInView(r), prio: reg, depth, role: 'Text', name: t, value: '', id: '', rect: null, flags: '' });
       }
     } else if (tag === 'IMG' && withText) {
       const a = txt(el.getAttribute('alt'));
       if (a) {
         const r = el.getBoundingClientRect();
-        items.push({ act: false, inView: rectInView(r), depth, role: 'Image', name: cut(a, 80), value: '', id: '', rect: null, flags: '' });
+        items.push({ act: false, inView: rectInView(r), prio: reg, depth, role: 'Image', name: cut(a, 80), value: '', id: '', rect: null, flags: '' });
       }
     }
 
@@ -214,35 +226,59 @@ export function readPage(opts) {
       try { doc = el.contentDocument; } catch (e) { doc = null; }
       if (doc && doc.body) {
         const fr = el.getBoundingClientRect();
-        items.push({ act: false, inView: rectInView(fr), depth: d, role: 'Frame', name: cut(el.title || el.name || '', 60), value: '', id: '', rect: null, flags: '' });
-        walk(doc.body, d + 1, ox + fr.left, oy + fr.top);
+        items.push({ act: false, inView: rectInView(fr), prio: reg, depth: d, role: 'Frame', name: cut(el.title || el.name || '', 60), value: '', id: '', rect: null, flags: '' });
+        walk(doc.body, d + 1, ox + fr.left, oy + fr.top, reg);
       } else {
         let host = '';
         try { host = new URL(el.src, location.href).host; } catch (e) { /* ignore */ }
-        items.push({ act: false, inView: true, depth: d, role: 'Frame', name: cut(el.title || host, 60), value: '', id: '', rect: null, flags: 'cross-origin' });
+        items.push({ act: false, inView: true, prio: reg, depth: d, role: 'Frame', name: cut(el.title || host, 60), value: '', id: '', rect: null, flags: 'cross-origin' });
       }
       return;
     }
-    if (el.shadowRoot) walk(el.shadowRoot, d, ox, oy);
-    walk(el, d, ox, oy);
+    if (el.shadowRoot) walk(el.shadowRoot, d, ox, oy, reg);
+    walk(el, d, ox, oy, reg);
   }
 
-  walk(document.documentElement, 0, 0, 0);
+  walk(document.documentElement, 0, 0, 0, 1);
 
-  let selected = items;
-  if (items.length > max) {
+  let pool = items;
+  if (queryTerms.length) {
+    pool = items.filter((it) => {
+      const hay = ((it.role || '') + ' ' + (it.name || '') + ' ' + (it.value || '') + ' ' + (it.id || '')).toLowerCase();
+      return queryTerms.some((q) => hay.includes(q));
+    });
+  }
+
+  let selected = pool;
+  if (pool.length > max) {
     truncated = true;
-    const inViewItems = items.filter((x) => x.inView);
-    const offViewItems = items.filter((x) => !x.inView);
-    selected = inViewItems.concat(offViewItems).slice(0, max);
+    const buckets = [
+      pool.filter((x) => x.inView && x.prio === 0),
+      pool.filter((x) => x.inView && x.prio === 1),
+      pool.filter((x) => x.inView && x.prio === 2),
+      pool.filter((x) => !x.inView && x.prio === 0),
+      pool.filter((x) => !x.inView && x.prio === 1),
+      pool.filter((x) => !x.inView && x.prio === 2),
+    ];
+    const picked = new Set();
+    for (const b of buckets) {
+      for (const it of b) {
+        if (picked.size >= max) break;
+        picked.add(it);
+      }
+      if (picked.size >= max) break;
+    }
+    selected = pool.filter((it) => picked.has(it));
   }
 
+  const seenEls = new Set();
   for (const it of selected) {
     let idx = null;
     if (it.act) {
       idx = refs.length;
       refs.push(it.el);
       meta.push({ role: it.role, name: it.name, id: it.id || it.name });
+      seenEls.add(it.el);
       interactive++;
     }
     let s = '  '.repeat(it.depth) + '- ';
@@ -256,7 +292,17 @@ export function readPage(opts) {
     rows.push(s);
   }
 
-  // the isolated world of this frame keeps the elements so later calls can act on [N]
+  // Also register off-display interactive elements in globalThis.__fastuse so actions.js can resolve
+  // any button/input on the page by name even when truncated from the text output.
+  for (const it of items) {
+    if (it.act && !seenEls.has(it.el)) {
+      refs.push(it.el);
+      meta.push({ role: it.role, name: it.name, id: it.id || it.name });
+      seenEls.add(it.el);
+    }
+  }
+
+  // the isolated world of this frame keeps the elements so later calls can act on [N] or by name
   globalThis.__fastuse = { snap: opts.snap || '', refs, meta };
 
   const de = document.documentElement;

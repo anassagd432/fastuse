@@ -22,10 +22,28 @@ To execute tasks in **50 milliseconds instead of 30 seconds**, follow these 3 ru
 - Semantic calls (`act`, `browser_act`, `get_window_state`) resolve controls by text/role in **0.9ms to 20ms** without any multimodal vision overhead.
 - **Only use `screenshot` when genuinely necessary:** inspecting visual drawings, image editors, canvas, games, or videos.
 
-### 2. ALWAYS Batch in a Single Turn (`steps: [...]`)
-- Never do 1 action per agent turn.
-- A multi-step task (e.g., search Google, click first link, read page) can be executed in **ONE single turn** with `browser_act` or `act`.
-- Fastuse runs all steps in order in native memory in under 50ms total.
+### 2. THINK ONCE, EXECUTE THE WHOLE PLAYBOOK (`steps` + `items` + Live Auto-Wait)
+- **Never pause to think between UI steps.** Like a human who already knows what they want to type or which leads they want to message, **plan the entire workflow upfront in Turn 1** and hand the full chain to `browser_act` or `act`.
+- **Live-DOM Auto-Wait (`browser_act` & `act`):** Every step automatically polls the live DOM (up to 3.5s) for modals, drawers, search inputs, or dynamically rendered buttons to appear. You can chain `navigate` -> `click "Message"` -> `fill "Start a new message"` -> `press "Enter"` in **one single call** before the modal is even open!
+- **Multi-Item Batch Playbooks (`items: [...]` + `{{var}}`):** When repeating a flow across multiple items (cold outreach with drafted DMs, searching multiple queries, scraping a list of profiles), pass `items` + templated `steps` in **ONE tool call**. `fastuse` loops over all items locally with **zero LLM thinking turns in between**:
+```json
+{
+  "macro_save": "send_cold_dm",
+  "items": [
+    { "url": "https://x.com/lead1", "dm": "Hey! Loved your post on..." },
+    { "url": "https://x.com/lead2", "dm": "Quick question about..." }
+  ],
+  "steps": [
+    { "tool": "navigate", "url": "{{url}}" },
+    { "tool": "click", "target": "Button:Message" },
+    { "tool": "fill", "target": "Start a new message", "text": "{{dm}}" },
+    { "tool": "press", "key": "Enter" }
+  ],
+  "observe": false
+}
+```
+- **Saved Macros (`macro_save` / `macro_name`):** Save any recurring step sequence with `"macro_save": "<name>"` and replay it anytime with `"macro_name": "<name>"` + `"items": [...]` without resending `steps`.
+- **Optional Steps & Inline Extraction:** Pass `"optional": true` on steps that may not appear (cookie banners, popups) so the flow never aborts, and use `{ "tool": "extract", "selector": "h1, main" }` inside `steps` to pull data mid-batch.
 
 ### 3. Route Correctly: Web vs. Desktop
 - **Web Pages & Browser Tabs:** Always use `browser_act` / `browser_state` (connects directly to the user's running Brave, Chrome, or Edge with active logins and cookies intact).

@@ -144,9 +144,11 @@ pub fn install() -> Result<String, String> {
             report += &format!("{name} host: {}\n", if ok { "registered" } else { "FAILED to register" });
         }
     }
+    let reloaded = super::call("ext.reload", json!({}), std::time::Duration::from_secs(2)).is_ok();
     report += &format!(
-        "\nExtension unpacked to: {}\nLoad it automatically via `fastuse browser-open`, or once via Developer Mode -> 'Load unpacked' at chrome://extensions / brave://extensions.",
-        ext_dir.display()
+        "\nExtension unpacked to: {}{}\nLoad it automatically via `fastuse browser-open`, or once via Developer Mode -> 'Load unpacked' at chrome://extensions / brave://extensions.",
+        ext_dir.display(),
+        if reloaded { " (live extension hot-reloaded)" } else { "" }
     );
     Ok(report)
 }

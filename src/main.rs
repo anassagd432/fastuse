@@ -3,6 +3,7 @@ mod imaging;
 #[cfg(any(windows, target_os = "macos"))]
 mod overlay;
 mod platform;
+mod playbook;
 #[cfg(feature = "runner")]
 mod runner;
 mod server;
